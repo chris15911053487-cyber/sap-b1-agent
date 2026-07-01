@@ -1,9 +1,10 @@
 """聊天服务 — 封装 DBAgent，管理对话生命周期."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from agent.core import DBAgent, AgentResponse
@@ -77,12 +78,19 @@ class ChatService:
             api_key=self.api_key,
             base_url=self.base_url,
         )
+        if database and database not in self._config.databases:
+            from backend.middleware.error_handler import AppError
+            raise AppError(
+                code="DB_NOT_FOUND",
+                message=f"数据库 '{database}' 不存在",
+                status_code=404,
+            )
         if database:
             agent.config.agent.default_db = database
 
         # Process with existing DBAgent
         try:
-            agent_response: AgentResponse = agent.process(message)
+            agent_response: AgentResponse = await asyncio.to_thread(agent.process, message)
         except Exception as e:
             logger.exception(f"Agent processing failed: {e}")
             agent_response = AgentResponse(

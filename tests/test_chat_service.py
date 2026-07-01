@@ -1,6 +1,7 @@
 import os
 import tempfile
 import pytest
+import pytest_asyncio
 from unittest.mock import MagicMock, patch
 from backend.services.chat_service import ChatService, ChatResponse
 from backend.services.history_service import HistoryService
@@ -18,7 +19,7 @@ os.environ.setdefault("DB_PROD_USER", "sa")
 os.environ.setdefault("DB_PROD_PASSWORD", "password")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def history_service():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -100,7 +101,10 @@ async def test_process_message_appends_to_existing_conversation(history_service,
 
     # Verify messages appended
     conv = await history_service.get_conversation(conv_id)
-    assert len(conv["messages"]) == 2  # user + assistant
+    assert len(conv["messages"]) == 2
+    assert conv["messages"][0]["role"] == "user"
+    assert conv["messages"][0]["content"] == "再查一下销售订单"
+    assert conv["messages"][1]["role"] == "assistant"
 
 
 @pytest.mark.asyncio
