@@ -1,0 +1,31 @@
+# config/config.example.yaml
+# SAP B1 数据库智能体 — 数据库连接配置模板
+# 复制此文件为 config.yaml，值引用 .env 中的环境变量
+
+databases:
+  test:
+    type: sql_server
+    host: ${DB_TEST_HOST}
+    port: ${DB_TEST_PORT}
+    database: ${DB_TEST_NAME}
+    username: ${DB_TEST_USER}
+    password: ${DB_TEST_PASSWORD}
+    timeout: 30
+    tds_version: "7.0"
+
+  production:
+    type: sql_server
+    host: ${DB_PROD_HOST}
+    port: ${DB_PROD_PORT}
+    database: ${DB_PROD_NAME}
+    username: ${DB_PROD_USER}
+    password: ${DB_PROD_PASSWORD}
+    timeout: 30
+    readonly: true
+
+agent:
+  default_db: test
+  model: deepseek-chat
+  max_query_rows: 1000
+  log_level: INFO
+  locale: zh_CN
