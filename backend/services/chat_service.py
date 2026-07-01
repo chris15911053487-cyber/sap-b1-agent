@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from typing import Optional
 
 from agent.core import DBAgent, AgentResponse
 from config.loader import load_config
+from backend.middleware.error_handler import AppError
 from backend.services.history_service import HistoryService
 
 logger = logging.getLogger(__name__)
@@ -78,14 +80,15 @@ class ChatService:
             api_key=self.api_key,
             base_url=self.base_url,
         )
-        if database and database not in self._config.databases:
-            from backend.middleware.error_handler import AppError
-            raise AppError(
-                code="DB_NOT_FOUND",
-                message=f"数据库 '{database}' 不存在",
-                status_code=404,
-            )
         if database:
+            if database not in self._config.databases:
+                raise AppError(
+                    code="DB_NOT_FOUND",
+                    message=f"数据库 '{database}' 不存在",
+                    status_code=404,
+                )
+            # Deep copy to avoid mutating the shared config object
+            agent.config = copy.deepcopy(agent.config)
             agent.config.agent.default_db = database
 
         # Process with existing DBAgent

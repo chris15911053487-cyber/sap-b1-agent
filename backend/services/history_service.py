@@ -1,7 +1,6 @@
 """对话历史持久化 — 基于 aiosqlite 的轻量存储."""
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from typing import Optional

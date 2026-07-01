@@ -25,11 +25,11 @@ class TableInfo(BaseModel):
     name: str
     description: str
     column_count: int
-    columns: list[dict]
+    columns: list[ColumnInfo]
 
 
 @router.get("/schema/tables", response_model=list[TableInfo])
-async def list_tables():
+def list_tables():
     """获取系统已知的 SAP B1 核心表结构列表."""
     core_tables = get_core_tables()
 
