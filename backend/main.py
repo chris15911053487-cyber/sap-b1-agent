@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.middleware.error_handler import register_exception_handlers
 from backend.services.history_service import HistoryService
 from backend.services.chat_service import ChatService
-from backend.routers import chat, history, connection, schema
+from backend.routers import chat, history, connection, schema, verification
 
 load_dotenv()
 
@@ -88,6 +88,7 @@ app.include_router(chat.router)
 app.include_router(history.router)
 app.include_router(connection.router)
 app.include_router(schema.router)
+app.include_router(verification.router)
 
 
 @app.get("/health")
