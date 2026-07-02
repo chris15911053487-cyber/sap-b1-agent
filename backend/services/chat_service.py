@@ -74,6 +74,21 @@ class ChatService:
             content=message,
         )
 
+        # Load conversation history for multi-turn context
+        history_messages: list[dict] = []
+        if conversation_id:
+            conv = await self.history.get_conversation(conversation_id)
+            if conv and conv.get("messages"):
+                history_messages = [
+                    {
+                        "role": m["role"],
+                        "content": m["content"],
+                        "sql": m.get("sql", ""),
+                        "intent": m.get("intent", ""),
+                    }
+                    for m in conv["messages"]
+                ]
+
         # Create agent — override default_db if database specified
         agent = DBAgent(
             config=self._config,
@@ -93,7 +108,9 @@ class ChatService:
 
         # Process with existing DBAgent
         try:
-            agent_response: AgentResponse = await asyncio.to_thread(agent.process, message)
+            agent_response: AgentResponse = await asyncio.to_thread(
+                agent.process, message, False, history_messages
+            )
         except Exception as e:
             logger.exception(f"Agent processing failed: {e}")
             agent_response = AgentResponse(
@@ -167,6 +184,21 @@ class ChatService:
             content=message,
         )
 
+        # Load conversation history for multi-turn context
+        history_messages: list[dict] = []
+        if conversation_id:
+            conv = await self.history.get_conversation(conversation_id)
+            if conv and conv.get("messages"):
+                history_messages = [
+                    {
+                        "role": m["role"],
+                        "content": m["content"],
+                        "sql": m.get("sql", ""),
+                        "intent": m.get("intent", ""),
+                    }
+                    for m in conv["messages"]
+                ]
+
         # Create agent
         agent = DBAgent(
             config=self._config,
@@ -195,7 +227,7 @@ class ChatService:
         # Forward agent stream, inject conversation_id on first event
         first_event = True
         try:
-            async for event in agent.process_stream(message):
+            async for event in agent.process_stream(message, history=history_messages):
                 if first_event:
                     if event.startswith("event: intent\n"):
                         prefix = "event: intent\ndata: "

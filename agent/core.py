@@ -43,12 +43,14 @@ class DBAgent:
         # 数据库连接（延迟连接）
         self._connections: dict[str, object] = {}
 
-    def process(self, user_input: str, no_execute: bool = False) -> AgentResponse:
+    def process(self, user_input: str, no_execute: bool = False,
+                history: list[dict] | None = None) -> AgentResponse:
         """处理用户输入，识别意图并路由到对应处理器.
 
         Args:
             user_input: 用户的自然语言输入。
             no_execute: 当为 True 时，仅生成 SQL 但不执行。
+            history: 可选的多轮对话历史（list of dicts, 每项含 role/content/sql/intent）。
         """
         intent_result = analyze_intent(user_input)
         logger.info(
@@ -57,7 +59,7 @@ class DBAgent:
         )
 
         if intent_result.intent == Intent.QUERY:
-            return self._handle_query(user_input, no_execute=no_execute)
+            return self._handle_query(user_input, no_execute=no_execute, history=history)
         elif intent_result.intent == Intent.BUILD_SP:
             return self._handle_build_sp(user_input)
         elif intent_result.intent == Intent.VERIFY:
@@ -65,7 +67,8 @@ class DBAgent:
         else:
             return self._handle_chat(user_input)
 
-    async def process_stream(self, user_input: str) -> AsyncGenerator[str, None]:
+    async def process_stream(self, user_input: str,
+                             history: list[dict] | None = None) -> AsyncGenerator[str, None]:
         """异步流式处理用户输入，逐事件 yield SSE 格式字符串。
 
         事件类型：
@@ -75,6 +78,10 @@ class DBAgent:
         - explanation: 中文解读
         - done: 处理完成
         - error: 错误信息
+
+        Args:
+            user_input: 用户的自然语言输入。
+            history: 可选的多轮对话历史。
         """
         import json
         from agent.intent import Intent as IntentEnum, analyze_intent as _analyze
@@ -87,7 +94,7 @@ class DBAgent:
         yield f"event: intent\ndata: {json.dumps({'intent': intent_result.intent.value, 'confidence': intent_result.confidence})}\n\n"
 
         if intent_result.intent == IntentEnum.QUERY:
-            async for event in self._stream_query(user_input):
+            async for event in self._stream_query(user_input, history=history):
                 yield event
         elif intent_result.intent == IntentEnum.BUILD_SP:
             async for event in self._stream_build_sp(user_input):
@@ -101,7 +108,8 @@ class DBAgent:
 
         yield f"event: done\ndata: {{}}\n\n"
 
-    async def _stream_query(self, user_input: str) -> AsyncGenerator[str, None]:
+    async def _stream_query(self, user_input: str,
+                            history: list[dict] | None = None) -> AsyncGenerator[str, None]:
         import json
 
         schema_context = self._get_schema_context()
@@ -112,6 +120,7 @@ class DBAgent:
             api_key=self.api_key,
             model=self.config.agent.model,
             base_url=self.base_url,
+            history=history,
         )
 
         if not gen_result.success:
@@ -141,6 +150,7 @@ class DBAgent:
                         api_key=self.api_key,
                         model=self.config.agent.model,
                         base_url=self.base_url,
+                        history=history,
                     )
                     yield f"event: explanation\ndata: {json.dumps({'text': explanation})}\n\n"
                 else:
@@ -261,12 +271,14 @@ class DBAgent:
 
         return build_schema_context_prompt(tables)
 
-    def _handle_query(self, user_input: str, no_execute: bool = False) -> AgentResponse:
+    def _handle_query(self, user_input: str, no_execute: bool = False,
+                      history: list[dict] | None = None) -> AgentResponse:
         """处理自然语言查询.
 
         Args:
             user_input: 用户的自然语言查询。
             no_execute: 为 True 时仅生成 SQL，不执行。
+            history: 可选的多轮对话历史。
         """
         schema_context = self._get_schema_context()
 
@@ -276,6 +288,7 @@ class DBAgent:
             api_key=self.api_key,
             model=self.config.agent.model,
             base_url=self.base_url,
+            history=history,
         )
 
         if not gen_result.success:
@@ -318,6 +331,7 @@ class DBAgent:
                         api_key=self.api_key,
                         model=self.config.agent.model,
                         base_url=self.base_url,
+                        history=history,
                     )
                 else:
                     data_table = f"查询失败: {query_result.error}"

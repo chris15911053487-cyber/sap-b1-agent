@@ -57,8 +57,18 @@ def interpret_query_result(
     api_key: str,
     model: str = "deepseek-chat",
     base_url: str = "https://api.deepseek.com",
+    history: list[dict] | None = None,
 ) -> str:
-    """调用 DeepSeek API 对查询结果进行自然语言解读."""
+    """调用 DeepSeek API 对查询结果进行自然语言解读.
+
+    Args:
+        result: 查询结果对象。
+        user_question: 用户的原始问题。
+        api_key: DeepSeek API Key。
+        model: 使用的模型 ID。
+        base_url: API Base URL。
+        history: 可选的多轮对话历史，用于上下文感知。
+    """
     if not result.success:
         return f"查询执行失败: {result.error}"
 
@@ -68,13 +78,32 @@ def interpret_query_result(
     data_table = format_result_as_markdown_table(result)
     prompt = build_interpretation_prompt(user_question, data_table)
 
+    messages: list[dict] = []
+
+    # Add conversation history for multi-turn context (last 10 exchanges max)
+    if history:
+        for h in history[-10:]:
+            role = h.get("role", "user")
+            content = h.get("content", "")
+            if role == "user":
+                messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                prev_sql = h.get("sql", "")
+                parts = [content]
+                if prev_sql:
+                    parts.append(f"\n[执行的SQL: {prev_sql}]")
+                messages.append({"role": "assistant", "content": "\n".join(parts)})
+
+    # Add current interpretation prompt
+    messages.append({"role": "user", "content": prompt})
+
     try:
         client = OpenAI(api_key=api_key, base_url=base_url)
         response = client.chat.completions.create(
             model=model,
             max_tokens=500,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
         interpretation = response.choices[0].message.content.strip()
         logger.info(f"Interpretation generated ({len(interpretation)} chars)")
