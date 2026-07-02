@@ -6,6 +6,7 @@ from typing import Optional, Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
 from backend.services.chat_service import ChatService
 from backend.middleware.error_handler import AppError
@@ -59,3 +60,27 @@ async def chat(request: ChatRequest) -> ChatResponseBody:
         success=result.success,
         error=result.error,
     )
+
+
+class StreamChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="用户自然语言输入")
+    database: str = Field(default="", description="目标数据库配置名")
+    conversation_id: Optional[str] = Field(default=None, description="对话 ID，空则创建新对话")
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: StreamChatRequest):
+    """流式对话（SSE），逐事件推送 intent → sql → data → explanation → done."""
+    if _chat_service is None:
+        raise AppError(
+            code="SERVICE_NOT_READY",
+            message="Chat service has not been initialized.",
+            status_code=503,
+        )
+
+    generator = _chat_service.process_message_stream(
+        message=request.message,
+        database=request.database,
+        conversation_id=request.conversation_id,
+    )
+    return EventSourceResponse(generator)

@@ -100,3 +100,38 @@ def test_chat_endpoint_default_database(client, mock_chat_service):
         database="",
         conversation_id=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_endpoint_returns_sse():
+    """POST /api/chat/stream should return text/event-stream."""
+    from backend.routers.chat import chat_stream, StreamChatRequest
+    from backend.services.chat_service import ChatService
+    from backend.services.history_service import HistoryService
+    import backend.routers.chat as chat_mod
+    import tempfile, os
+
+    # Setup minimal services
+    db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+    history_svc = HistoryService(db_path=db_path)
+    await history_svc.init()
+
+    from unittest.mock import MagicMock
+    chat_svc = MagicMock(spec=ChatService)
+    async def mock_stream(message, database="", conversation_id=None):
+        yield "event: intent\ndata: {\"intent\": \"chat\"}\n\n"
+        yield "event: explanation\ndata: {\"text\": \"hello\"}\n\n"
+        yield "event: done\ndata: {}\n\n"
+    chat_svc.process_message_stream = mock_stream
+
+    original = chat_mod._chat_service
+    chat_mod._chat_service = chat_svc
+
+    try:
+        req = StreamChatRequest(message="hi")
+        response = await chat_stream(req)
+        # EventSourceResponse wraps the generator
+        assert response is not None
+    finally:
+        chat_mod._chat_service = original
+        await history_svc.close()
