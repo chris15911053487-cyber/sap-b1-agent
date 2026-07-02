@@ -32,21 +32,30 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AppError)
     async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-        logger.warning(f"AppError [{exc.code}]: {exc.message}")
-        body: dict[str, Any] = {"error": {"code": exc.code, "message": exc.message}}
+        request_id = getattr(request.state, "request_id", "unknown")
+        logger.error(f"[{request_id}] AppError: {exc.code} - {exc.message}")
+        body: dict[str, Any] = {
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "request_id": request_id,
+            }
+        }
         if exc.details:
             body["error"]["details"] = exc.details
         return JSONResponse(status_code=exc.status_code, content=body)
 
     @app.exception_handler(Exception)
     async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception(f"Unhandled exception: {exc}")
+        request_id = getattr(request.state, "request_id", "unknown")
+        logger.exception(f"[{request_id}] Unhandled exception: {exc}")
         return JSONResponse(
             status_code=500,
             content={
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": "服务器内部错误，请查看日志或联系管理员。",
+                    "request_id": request_id,
                 }
             },
         )

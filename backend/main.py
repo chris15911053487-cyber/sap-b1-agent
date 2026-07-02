@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import logging
+import logging.config
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from backend.middleware.error_handler import register_exception_handlers
 from backend.services.history_service import HistoryService
@@ -15,6 +20,37 @@ from backend.services.chat_service import ChatService
 from backend.routers import chat, history, connection, schema, verification, webhook
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Structured logging configuration
+# ---------------------------------------------------------------------------
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+        "detailed": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "root": {"level": "INFO", "handlers": ["console"]},
+    "loggers": {
+        "api.request": {"level": "INFO"},
+        "backend": {"level": "DEBUG" if os.getenv("AGENT_ENV") == "development" else "INFO"},
+        "agent": {"level": "INFO"},
+    },
+}
+logging.config.dictConfig(LOGGING_CONFIG)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +100,28 @@ async def lifespan(app: FastAPI):
     await history_svc.close()
 
 
+class RequestTracingMiddleware(BaseHTTPMiddleware):
+    """注入 request_id 并记录请求耗时."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+        request.state.request_id = request_id
+        start = time.time()
+
+        response = await call_next(request)
+
+        elapsed = time.time() - start
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Response-Time"] = f"{elapsed:.3f}s"
+
+        _logger = logging.getLogger("api.request")
+        _logger.info(
+            f"[{request_id}] {request.method} {request.url.path} "
+            f"-> {response.status_code} ({elapsed:.3f}s)"
+        )
+        return response
+
+
 app = FastAPI(
     title="SAP B1 DB Agent API",
     description="SAP Business One 数据库 AI 智能体 Web API",
@@ -79,6 +137,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Request tracing — must be early in middleware stack
+app.add_middleware(RequestTracingMiddleware)
 
 # Error handling
 register_exception_handlers(app)

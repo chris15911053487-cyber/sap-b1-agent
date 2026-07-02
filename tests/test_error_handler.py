@@ -5,6 +5,7 @@ from backend.middleware.error_handler import AppError, register_exception_handle
 
 def test_app_error_returns_unified_format():
     app = FastAPI()
+    request_id = "unknown"
 
     @app.get("/test-error")
     def raise_error():
@@ -19,6 +20,7 @@ def test_app_error_returns_unified_format():
         "error": {
             "code": "SOMETHING_BROKEN",
             "message": "Something went wrong",
+            "request_id": request_id,
         }
     }
 
@@ -38,6 +40,8 @@ def test_app_error_with_details():
     data = response.json()
     assert data["error"]["code"] == "VALIDATION_ERROR"
     assert data["error"]["details"] == {"field": "name"}
+    assert data["error"]["request_id"] == "unknown"
+
 
 
 def test_unhandled_exception_returns_generic_error():
@@ -58,3 +62,4 @@ def test_unhandled_exception_returns_generic_error():
     data = response.json()
     assert data["error"]["code"] == "INTERNAL_ERROR"
     assert "Unexpected" not in data["error"]["message"]  # don't leak internal details
+    assert data["error"]["request_id"] == "unknown"

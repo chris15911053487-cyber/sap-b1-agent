@@ -40,6 +40,21 @@ def test_openapi_schema(client):
     assert "/api/schema/tables" in paths
 
 
+def test_health_returns_request_id(client):
+    """Health check should include X-Request-ID and X-Response-Time headers."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert "X-Request-ID" in response.headers
+    assert "X-Response-Time" in response.headers
+
+
+def test_request_id_persists_across_endpoints(client):
+    """Client provided X-Request-ID should echo back."""
+    response = client.get("/health", headers={"X-Request-ID": "my-test-id"})
+    assert response.status_code == 200
+    assert response.headers.get("X-Request-ID") == "my-test-id"
+
+
 def test_cors_headers(client):
     response = client.options(
         "/api/chat",
