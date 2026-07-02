@@ -175,6 +175,7 @@ export const useChatStore = defineStore('chat', () => {
             content: event.error,
           })
           error.value = event.error
+          isLoading.value = false
         },
         onDone: () => {
           isLoading.value = false
