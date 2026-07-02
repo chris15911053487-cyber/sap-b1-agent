@@ -67,7 +67,10 @@ export function streamChatMessage(
     }
 
     const reader = response.body?.getReader()
-    if (!reader) return
+    if (!reader) {
+      callbacks.onError?.({ error: '浏览器不支持流式读取' })
+      return
+    }
 
     const decoder = new TextDecoder()
     let buffer = ''
@@ -94,6 +97,7 @@ export function streamChatMessage(
         }
       }
     }
+    callbacks.onDone?.()
   }).catch((err: Error) => {
     if (err.name !== 'AbortError') {
       callbacks.onError?.({ error: err.message || '网络错误' })
