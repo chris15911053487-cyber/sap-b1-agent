@@ -68,3 +68,57 @@ export interface ColumnInfo {
   is_primary_key: boolean
   description: string
 }
+
+/** SSE 流式事件类型 */
+export interface SSEIntentEvent {
+  intent: string
+  confidence: number
+  conversation_id: string
+}
+
+export interface SSESqlEvent {
+  sql: string
+}
+
+export interface SSEDataEvent {
+  markdown?: string
+  findings?: VerifyFindingItem[]
+  pass_rate?: number
+  total?: number
+  passed?: number
+  failed?: number
+}
+
+export interface SSEExplanationEvent {
+  text: string
+}
+
+export interface SSEErrorEvent {
+  error: string
+}
+
+export interface VerifyFindingItem {
+  check_name: string
+  status: string
+  detail: string
+}
+
+/** 流式回调 */
+export interface StreamCallbacks {
+  onIntent?: (event: SSEIntentEvent) => void
+  onSql?: (event: SSESqlEvent) => void
+  onData?: (event: SSEDataEvent) => void
+  onExplanation?: (event: SSEExplanationEvent) => void
+  onError?: (event: SSEErrorEvent) => void
+  onDone?: () => void
+}
+
+/** /api/verify 响应 */
+export interface VerifyResponse {
+  plan_name: string
+  total_checks: number
+  passed: number
+  failed: number
+  pass_rate: number
+  findings: VerifyFindingItem[]
+}
