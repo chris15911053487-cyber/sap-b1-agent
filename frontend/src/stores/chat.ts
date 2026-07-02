@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { sendChatMessage, listConversations, getConversation, deleteConversation } from '../api/client'
-import type { ConversationSummary, MessageDetail, ChatResponse } from '../api/types'
+import { sendChatMessage, streamChatMessage, listConversations, getConversation, deleteConversation } from '../api/client'
+import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent } from '../api/types'
 
 export interface DisplayMessage {
   id: string
@@ -20,6 +20,7 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<DisplayMessage[]>([])
   const isLoading = ref(false)
   const error = ref<string | null>(null)
+  let _abortController: AbortController | null = null
 
   const activeConversation = computed(() =>
     conversations.value.find(c => c.id === activeConversationId.value) || null
@@ -102,6 +103,94 @@ export const useChatStore = defineStore('chat', () => {
     error.value = null
   }
 
+  async function sendMessageStream(content: string, database: string) {
+    // Abort any previous stream
+    if (_abortController) {
+      _abortController.abort()
+    }
+
+    // Add user message immediately
+    const userMsg: DisplayMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content,
+      intent: '',
+      sql: '',
+      dataMarkdown: '',
+      explanation: '',
+      timestamp: new Date(),
+    }
+    messages.value.push(userMsg)
+    isLoading.value = true
+    error.value = null
+
+    // Create placeholder assistant message
+    const assistantId = crypto.randomUUID()
+    const assistantMsg: DisplayMessage = {
+      id: assistantId,
+      role: 'assistant',
+      content: '思考中...',
+      intent: '',
+      sql: '',
+      dataMarkdown: '',
+      explanation: '',
+      timestamp: new Date(),
+    }
+    messages.value.push(assistantMsg)
+
+    _abortController = streamChatMessage(
+      { message: content, database, conversation_id: activeConversationId.value },
+      {
+        onIntent: (event: SSEIntentEvent) => {
+          updateAssistant(assistantId, {
+            intent: event.intent,
+            content: `识别意图: ${event.intent}`,
+          })
+          if (!activeConversationId.value) {
+            activeConversationId.value = event.conversation_id
+            fetchConversations(database)
+          }
+        },
+        onSql: (event: SSESqlEvent) => {
+          updateAssistant(assistantId, {
+            sql: event.sql,
+            content: `正在执行 SQL...`,
+          })
+        },
+        onData: (event: SSEDataEvent) => {
+          const md = event.markdown || ''
+          updateAssistant(assistantId, {
+            dataMarkdown: md,
+            content: md ? '查询结果已返回' : '处理中...',
+          })
+        },
+        onExplanation: (event: SSEExplanationEvent) => {
+          updateAssistant(assistantId, {
+            explanation: event.text,
+            content: event.text,
+          })
+        },
+        onError: (event: SSEErrorEvent) => {
+          updateAssistant(assistantId, {
+            content: event.error,
+          })
+          error.value = event.error
+        },
+        onDone: () => {
+          isLoading.value = false
+          _abortController = null
+        },
+      },
+    )
+  }
+
+  function updateAssistant(id: string, updates: Partial<DisplayMessage>) {
+    const idx = messages.value.findIndex(m => m.id === id)
+    if (idx !== -1) {
+      messages.value[idx] = { ...messages.value[idx], ...updates }
+    }
+  }
+
   function toDisplayMessage(m: MessageDetail): DisplayMessage {
     let dataMarkdown = ''
     try {
@@ -135,5 +224,6 @@ export const useChatStore = defineStore('chat', () => {
     sendMessage,
     removeConversation,
     newConversation,
+    sendMessageStream,
   }
 })
