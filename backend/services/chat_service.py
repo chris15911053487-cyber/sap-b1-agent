@@ -149,8 +149,6 @@ class ChatService:
         与 process_message() 相同的逻辑，但通过 DBAgent.process_stream()
         逐事件转发，同时在完成时持久化对话记录。
         """
-        import json as _json
-
         # Resolve conversation
         if conversation_id:
             existing = await self.history.get_conversation(conversation_id)
@@ -196,27 +194,32 @@ class ChatService:
 
         # Forward agent stream, inject conversation_id on first event
         first_event = True
-        async for event in agent.process_stream(message):
-            if first_event:
-                # Inject conversation_id into the intent event data
-                if event.startswith("event: intent\n"):
-                    prefix = "event: intent\ndata: "
-                    payload = event[len(prefix):].strip()
-                    try:
-                        data = _json.loads(payload)
-                    except _json.JSONDecodeError:
-                        data = {}
-                    data["conversation_id"] = conversation_id
-                    event = f"event: intent\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
-                first_event = False
-            yield event
-            self._collect_event(event, collected)
+        try:
+            async for event in agent.process_stream(message):
+                if first_event:
+                    if event.startswith("event: intent\n"):
+                        prefix = "event: intent\ndata: "
+                        payload = event[len(prefix):].strip()
+                        try:
+                            data = json.loads(payload)
+                        except json.JSONDecodeError:
+                            data = {}
+                        data["conversation_id"] = conversation_id
+                        event = f"event: intent\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    first_event = False
+                yield event
+                self._collect_event(event, collected)
+        except Exception as e:
+            logger.exception(f"Stream processing failed: {e}")
+            error_event = f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            yield error_event
+            collected["error"] = str(e)
 
         # Save assistant message to history
         data_json = ""
         if collected["data_markdown"]:
             try:
-                data_json = _json.dumps(
+                data_json = json.dumps(
                     {"markdown": collected["data_markdown"]}, ensure_ascii=False
                 )
             except (TypeError, ValueError):
@@ -233,9 +236,9 @@ class ChatService:
 
     def _collect_event(self, event: str, collected: dict) -> None:
         """从 SSE 事件中提取字段到 collected dict。"""
-        import json as _json
-
-        if not event.startswith("event: ") or event.startswith("event: done\n"):
+        if not event.startswith("event: "):
+            return
+        if event.startswith("event: done\n"):
             return
 
         lines = event.strip().split("\n")
@@ -251,8 +254,8 @@ class ChatService:
             return
 
         try:
-            payload = _json.loads(data_str)
-        except _json.JSONDecodeError:
+            payload = json.loads(data_str)
+        except json.JSONDecodeError:
             return
 
         if event_type == "intent":
