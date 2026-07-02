@@ -9,7 +9,7 @@ const chatStore = useChatStore()
 const settingsStore = useSettingsStore()
 
 function onSend(message: string) {
-  chatStore.sendMessage(message, settingsStore.activeDatabase)
+  chatStore.sendMessageStream(message, settingsStore.activeDatabase)
 }
 </script>
 
