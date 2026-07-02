@@ -1,24 +1,49 @@
-FROM python:3.11-slim-bookworm
+# ============================================================
+# Stage 1: Build frontend (Node.js)
+# ============================================================
+FROM node:20-alpine AS frontend-builder
 
-LABEL maintainer="SAP B1 Consultant"
-LABEL description="SAP Business One AI Database Agent"
+WORKDIR /src
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 
-# 安装 FreeTDS（pymssql 依赖，纯 TDS 协议，不经过 ODBC/OpenSSL）
+COPY frontend/ ./
+RUN npm run build
+
+# ============================================================
+# Stage 2: Python backend
+# ============================================================
+FROM python:3.11-slim-bookworm AS backend
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gnupg ca-certificates \
-    freetds-dev freetds-bin \
+    curl freetds-dev freetds-bin \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /app/config /app/logs /app/data
+RUN mkdir -p /app/data /app/logs && chmod 777 /app/data /app/logs
 
-RUN useradd --create-home --shell /bin/bash agent && chown -R agent:agent /app
-USER agent
+EXPOSE 8000
 
-ENTRYPOINT ["python", "main.py"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["python", "backend/run.py"]
+
+# ============================================================
+# Stage 3: Nginx + frontend static files
+# ============================================================
+FROM nginx:alpine AS frontend
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=frontend-builder /src/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+    CMD wget -q -O /dev/null http://localhost/health || exit 1
