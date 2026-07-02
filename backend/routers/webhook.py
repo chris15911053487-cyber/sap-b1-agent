@@ -1,19 +1,21 @@
 """IM 机器人 Webhook 端点 — 飞书 / 企微 / 钉钉."""
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 import time
 from typing import Optional, Any
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/webhook", tags=["webhook"])
 
 logger = logging.getLogger(__name__)
+
+_MAX_REPLY_LENGTH = 4000
+_BOT_NAME = "SAP B1 智能助手"
+_WEBHOOK_TIMEOUT = 10
 
 # ============================================================
 # Shared models
@@ -83,9 +85,9 @@ def _build_feishu_card_reply(text: str, ctx: WebhookContext) -> dict:
     return {
         "msg_type": "interactive",
         "card": {
-            "header": {"title": {"tag": "plain_text", "content": "SAP B1 智能助手"}},
+            "header": {"title": {"tag": "plain_text", "content": _BOT_NAME}},
             "elements": [
-                {"tag": "markdown", "content": text[:4000]},
+                {"tag": "markdown", "content": text[:_MAX_REPLY_LENGTH]},
                 {"tag": "hr"},
                 {"tag": "note", "elements": [
                     {"tag": "plain_text", "content": f"查询人: {ctx.user_id or '未知'} | {time.strftime('%Y-%m-%d %H:%M')}"}
@@ -158,10 +160,10 @@ async def _send_wecom_reply(webhook_url: str, text: str):
     """通过企微 webhook URL 推送回复."""
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT) as client:
             await client.post(webhook_url, json={
                 "msgtype": "markdown",
-                "markdown": {"content": f"## SAP B1 智能助手\n{text[:4000]}"},
+                "markdown": {"content": f"## {_BOT_NAME}\n{text[:_MAX_REPLY_LENGTH]}"},
             })
     except Exception:
         logger.exception("Failed to send WeCom webhook reply")
@@ -171,7 +173,7 @@ def _build_wecom_reply(text: str) -> dict:
     """构建企微同步回复."""
     return {
         "msgtype": "markdown",
-        "markdown": {"content": f"## SAP B1 智能助手\n{text[:4000]}"},
+        "markdown": {"content": f"## {_BOT_NAME}\n{text[:_MAX_REPLY_LENGTH]}"},
     }
 
 
@@ -230,10 +232,10 @@ async def _send_dingtalk_reply(webhook_url: str, text: str):
     """通过钉钉 webhook URL 推送回复."""
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT) as client:
             await client.post(webhook_url, json={
                 "msgtype": "markdown",
-                "markdown": {"title": "SAP B1 智能助手", "text": text[:4000]},
+                "markdown": {"title": _BOT_NAME, "text": text[:_MAX_REPLY_LENGTH]},
             })
     except Exception:
         logger.exception("Failed to send DingTalk webhook reply")
@@ -243,7 +245,7 @@ def _build_dingtalk_reply(text: str) -> dict:
     """构建钉钉同步回复."""
     return {
         "msgtype": "markdown",
-        "markdown": {"title": "SAP B1 智能助手", "text": text[:4000]},
+        "markdown": {"title": _BOT_NAME, "text": text[:_MAX_REPLY_LENGTH]},
     }
 
 
@@ -254,7 +256,6 @@ def _build_dingtalk_reply(text: str) -> dict:
 async def _process_with_chat(ctx: WebhookContext) -> str:
     """调用 ChatService 处理消息并返回中文解释."""
     import backend.routers.chat as chat_mod
-    from backend.services.chat_service import ChatService
 
     chat_svc = chat_mod._chat_service
     if chat_svc is None:
