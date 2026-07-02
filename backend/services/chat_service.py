@@ -263,7 +263,11 @@ class ChatService:
         elif event_type == "sql":
             collected["sql"] = payload.get("sql", "")
         elif event_type == "data":
-            collected["data_markdown"] = payload.get("markdown", "")
+            # Capture query results (markdown) or verification findings
+            if "markdown" in payload:
+                collected["data_markdown"] = payload.get("markdown", "")
+            elif "findings" in payload:
+                collected["data_markdown"] = json.dumps(payload, ensure_ascii=False)
         elif event_type == "explanation":
             collected["explanation"] = payload.get("text", "")
         elif event_type == "error":
