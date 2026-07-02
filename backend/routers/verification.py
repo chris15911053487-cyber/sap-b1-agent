@@ -7,7 +7,7 @@ from typing import Optional, Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from agent.verifier import VerificationReport, VerificationFinding
+_PLAN_NAME = "数据验证"
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def run_verification(request: VerifyRequest) -> VerifyResponse:
 
     if not db_config:
         return VerifyResponse(
-            plan_name="数据验证",
+            plan_name=_PLAN_NAME,
             total_checks=len(checks),
             passed=0,
             failed=0,
@@ -104,7 +104,7 @@ def run_verification(request: VerifyRequest) -> VerifyResponse:
     failed = sum(1 for f in findings if f.status in ("fail", "error"))
 
     return VerifyResponse(
-        plan_name="数据验证",
+        plan_name=_PLAN_NAME,
         total_checks=total,
         passed=passed,
         failed=failed,

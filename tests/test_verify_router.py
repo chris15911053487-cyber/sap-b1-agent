@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 def mock_config():
     """Mock load_config to return a config with test database only."""
     with patch("config.loader.load_config") as mock_load:
-        from config.loader import AppConfig, DatabaseConfig, AgentConfig
+        from config.loader import DatabaseConfig
 
         mock_obj = MagicMock()
         mock_obj.agent.default_db = "test"
