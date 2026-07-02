@@ -6,6 +6,7 @@ import type {
   ConversationDetail,
   ConnectionTestRequest,
   ConnectionTestResponse,
+  DatabaseInfo,
   TableInfo,
   StreamCallbacks,
   VerifyResponse,
@@ -41,6 +42,11 @@ export async function deleteConversation(id: string): Promise<void> {
 export async function testConnection(req: ConnectionTestRequest): Promise<ConnectionTestResponse> {
   const { data } = await api.post<ConnectionTestResponse>('/connection/test', req)
   return data
+}
+
+export async function listDatabases(): Promise<DatabaseInfo[]> {
+  const { data } = await api.get<{ databases: DatabaseInfo[] }>('/connection/databases')
+  return data.databases
 }
 
 export async function listTables(): Promise<TableInfo[]> {

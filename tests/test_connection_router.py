@@ -95,3 +95,55 @@ def test_connection_default_db(mock_load, client):
 
         response = client.post("/api/connection/test", json={})
         assert response.status_code == 200
+
+
+@patch("backend.routers.connection.load_config")
+def test_list_databases(mock_load, client):
+    from config.loader import AppConfig, AgentConfig, DatabaseConfig
+
+    mock_load.return_value = AppConfig(
+        databases={
+            "test": DatabaseConfig(
+                type="sql_server", host="localhost", port=1433,
+                database="TESTDB", username="sa", password="pass",
+            ),
+            "production": DatabaseConfig(
+                type="sql_server", host="prod.example.com", port=1433,
+                database="PRODDB", username="admin", password="secret",
+            ),
+        },
+        agent=AgentConfig(default_db="test"),
+    )
+
+    response = client.get("/api/connection/databases")
+    assert response.status_code == 200
+    data = response.json()
+    assert "databases" in data
+    assert len(data["databases"]) == 2
+
+    db_names = {d["name"] for d in data["databases"]}
+    assert db_names == {"test", "production"}
+
+    # Ensure password is NOT exposed
+    test_db = next(d for d in data["databases"] if d["name"] == "test")
+    assert "password" not in test_db
+    assert test_db["host"] == "localhost"
+    assert test_db["port"] == 1433
+    assert test_db["database"] == "TESTDB"
+    from config.loader import AppConfig, AgentConfig, DatabaseConfig
+
+    mock_load.return_value = AppConfig(
+        databases={"test": DatabaseConfig(
+            type="sql_server", host="localhost", port=1433,
+            database="TESTDB", username="sa", password="pass",
+        )},
+        agent=AgentConfig(default_db="test"),
+    )
+
+    with patch("backend.routers.connection.create_connection") as mock_create, \
+         patch("backend.routers.connection.test_db_conn") as mock_test:
+        mock_create.return_value = make_mock_conn()
+        mock_test.return_value = True
+
+        response = client.post("/api/connection/test", json={})
+        assert response.status_code == 200

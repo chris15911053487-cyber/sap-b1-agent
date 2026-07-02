@@ -42,6 +42,13 @@ export interface ConversationDetail {
   messages: MessageDetail[]
 }
 
+export interface DatabaseInfo {
+  name: string
+  host: string
+  port: number
+  database: string
+}
+
 export interface ConnectionTestRequest {
   database?: string
 }

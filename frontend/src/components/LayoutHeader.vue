@@ -1,18 +1,25 @@
 <script setup lang="ts">
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingsStore } from '../stores/settings'
 
 const router = useRouter()
 const settingsStore = useSettingsStore()
 
-const databaseOptions = [
-  { label: '测试库', value: 'test' },
-  { label: '生产库', value: 'production' },
-]
+const databaseOptions = computed(() =>
+  settingsStore.databases.map(db => ({
+    label: db.database ? `${db.name} (${db.database})` : db.name,
+    value: db.name,
+  }))
+)
 
 function navigate(key: string) {
   router.push({ name: key })
 }
+
+onMounted(() => {
+  settingsStore.fetchDatabases()
+})
 </script>
 
 <template>

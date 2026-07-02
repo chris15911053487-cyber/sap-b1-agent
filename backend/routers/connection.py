@@ -31,6 +31,32 @@ class ConnectionTestResponse(BaseModel):
     port: int = 0
 
 
+class DatabaseInfo(BaseModel):
+    name: str
+    host: str
+    port: int
+    database: str
+
+
+class DatabasesResponse(BaseModel):
+    databases: list[DatabaseInfo]
+
+
+@router.get("/connection/databases", response_model=DatabasesResponse)
+async def list_databases() -> DatabasesResponse:
+    """返回 config.yaml 中所有已配置的数据库列表（不含密码）."""
+    config = load_config(_config_path)
+    result = []
+    for name, db_cfg in config.databases.items():
+        result.append(DatabaseInfo(
+            name=name,
+            host=db_cfg.host,
+            port=db_cfg.port,
+            database=db_cfg.database,
+        ))
+    return DatabasesResponse(databases=result)
+
+
 @router.post("/connection/test", response_model=ConnectionTestResponse)
 async def test_connection(request: ConnectionTestRequest) -> ConnectionTestResponse:
     """测试指定数据库连接是否可用."""
