@@ -104,10 +104,36 @@ export interface SSEErrorEvent {
   error: string
 }
 
+/** SSE progress 事件 — 长时间操作的状态更新 */
+export interface SSEProgressEvent {
+  stage: string
+  message: string
+}
+
 export interface VerifyFindingItem {
   check_name: string
   status: string
   detail: string
+}
+
+/** SP 架构 — 单个存储过程 */
+export interface SpArchProcedure {
+  name: string
+  description: string
+  dependencies: string[]
+  output_table: string
+  parameters: Record<string, string>
+  business_logic: string
+  generated_code: string
+}
+
+/** SSE sp_arch 事件 */
+export interface SSESpArchEvent {
+  name: string
+  description: string
+  design_notes: string
+  procedures: SpArchProcedure[]
+  execution_order: string[]
 }
 
 /** 流式回调 */
@@ -115,8 +141,10 @@ export interface StreamCallbacks {
   onIntent?: (event: SSEIntentEvent) => void
   onSql?: (event: SSESqlEvent) => void
   onData?: (event: SSEDataEvent) => void
+  onSpArch?: (event: SSESpArchEvent) => void
   onExplanation?: (event: SSEExplanationEvent) => void
   onError?: (event: SSEErrorEvent) => void
+  onProgress?: (event: SSEProgressEvent) => void
   onDone?: () => void
 }
 

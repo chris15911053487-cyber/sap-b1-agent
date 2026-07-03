@@ -229,21 +229,19 @@ class ChatService:
         try:
             async for event in agent.process_stream(message, history=history_messages):
                 if first_event:
-                    if event.startswith("event: intent\n"):
-                        prefix = "event: intent\ndata: "
-                        payload = event[len(prefix):].strip()
+                    if isinstance(event, dict) and event.get("event") == "intent":
                         try:
-                            data = json.loads(payload)
-                        except json.JSONDecodeError:
+                            data = json.loads(event["data"])
+                        except (json.JSONDecodeError, KeyError):
                             data = {}
                         data["conversation_id"] = conversation_id
-                        event = f"event: intent\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                        event = {"event": "intent", "data": json.dumps(data, ensure_ascii=False)}
                     first_event = False
                 yield event
                 self._collect_event(event, collected)
         except Exception as e:
             logger.exception(f"Stream processing failed: {e}")
-            error_event = f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            error_event = {"event": "error", "data": json.dumps({"error": str(e)})}
             yield error_event
             collected["error"] = str(e)
 
@@ -266,28 +264,19 @@ class ChatService:
             data_json=data_json,
         )
 
-    def _collect_event(self, event: str, collected: dict) -> None:
-        """从 SSE 事件中提取字段到 collected dict。"""
-        if not event.startswith("event: "):
+    def _collect_event(self, event: dict, collected: dict) -> None:
+        """从 SSE dict 事件中提取字段到 collected dict。"""
+        if not isinstance(event, dict):
             return
-        if event.startswith("event: done\n"):
-            return
+        event_type = event.get("event", "")
+        data_str = event.get("data", "")
 
-        lines = event.strip().split("\n")
-        event_type = ""
-        data_str = ""
-        for line in lines:
-            if line.startswith("event: "):
-                event_type = line[7:]
-            elif line.startswith("data: "):
-                data_str = line[6:]
-
-        if not data_str:
+        if event_type == "done" or not data_str:
             return
 
         try:
             payload = json.loads(data_str)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             return
 
         if event_type == "intent":
@@ -295,11 +284,12 @@ class ChatService:
         elif event_type == "sql":
             collected["sql"] = payload.get("sql", "")
         elif event_type == "data":
-            # Capture query results (markdown) or verification findings
             if "markdown" in payload:
                 collected["data_markdown"] = payload.get("markdown", "")
             elif "findings" in payload:
-                collected["data_markdown"] = json.dumps(payload, ensure_ascii=False)
+                collected["data_markdown"] = data_str
+        elif event_type == "sp_arch":
+            collected["data_markdown"] = data_str
         elif event_type == "explanation":
             collected["explanation"] = payload.get("text", "")
         elif event_type == "error":

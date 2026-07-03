@@ -49,3 +49,7 @@ Phase4 Task 1: complete (commits 111d615..d307a9d, review clean after fix: dead 
 Phase4 Task 2: complete (commits d307a9d..ff3cc89, review clean: Dockerfile + nginx.conf + backend/run.py)
 Phase4 Task 3: complete (commits ff3cc89..bddf950, docker compose two-service verified)
 Phase4 Task 4: E2E verified — 110/114 backend tests pass (4 pre-existing), vue-tsc clean, vite build passes, Docker build OK
+Phase5 Task 1: complete (commits bddf950..74bb00a, dynamic database selector, 115 tests, vue-tsc clean)
+Phase5 Task 2: complete (commits 74bb00a..d64413d, multi-turn context, 130 tests, review approved)
+Phase5 Task 3: complete (commits d64413d..e164e4e, structured logging + request IDs, 132 tests)
+Phase5 Task 4: E2E verified — 132/132 backend tests pass, vue-tsc clean, vite build passes

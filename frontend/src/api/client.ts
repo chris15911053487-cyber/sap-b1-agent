@@ -80,6 +80,10 @@ export function streamChatMessage(
 
     const decoder = new TextDecoder()
     let buffer = ''
+    // MUST be outside the while loop: a long data line (e.g. sp_arch 50KB+ JSON)
+    // can span multiple TCP chunks. eventType set in one iteration must survive
+    // into the next where the data line finally completes.
+    let eventType = ''
 
     while (true) {
       const { done, value } = await reader.read()
@@ -89,17 +93,15 @@ export function streamChatMessage(
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
 
-      let eventType = ''
-      let dataStr = ''
-
       for (const line of lines) {
         if (line.startsWith('event: ')) {
           eventType = line.slice(7).trim()
+          if (eventType === 'sp_arch') console.log('[SSE] saw sp_arch event line')
         } else if (line.startsWith('data: ')) {
-          dataStr = line.slice(6)
+          const dataStr = line.slice(6)
+          if (eventType === 'sp_arch') console.log('[SSE] dispatching sp_arch, data length:', dataStr.length)
           _dispatchSSE(eventType, dataStr, callbacks)
           eventType = ''
-          dataStr = ''
         }
       }
     }
@@ -126,18 +128,24 @@ function _dispatchSSE(eventType: string, dataStr: string, callbacks: StreamCallb
       case 'data':
         callbacks.onData?.(data)
         break
+      case 'sp_arch':
+        callbacks.onSpArch?.(data)
+        break
       case 'explanation':
         callbacks.onExplanation?.(data)
         break
       case 'error':
         callbacks.onError?.(data)
         break
+      case 'progress':
+        callbacks.onProgress?.(data)
+        break
       case 'done':
         callbacks.onDone?.()
         break
     }
-  } catch {
-    // ignore parse errors for non-JSON data
+  } catch (e) {
+    console.error(`[SSE] Failed to parse ${eventType} event:`, e, dataStr.slice(0, 200))
   }
 }
 

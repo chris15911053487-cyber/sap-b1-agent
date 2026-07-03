@@ -119,9 +119,9 @@ async def test_chat_stream_endpoint_returns_sse():
     from unittest.mock import MagicMock
     chat_svc = MagicMock(spec=ChatService)
     async def mock_stream(message, database="", conversation_id=None):
-        yield "event: intent\ndata: {\"intent\": \"chat\"}\n\n"
-        yield "event: explanation\ndata: {\"text\": \"hello\"}\n\n"
-        yield "event: done\ndata: {}\n\n"
+        yield {"event": "intent", "data": '{"intent": "chat"}'}
+        yield {"event": "explanation", "data": '{"text": "hello"}'}
+        yield {"event": "done", "data": "{}"}
     chat_svc.process_message_stream = mock_stream
 
     original = chat_mod._chat_service

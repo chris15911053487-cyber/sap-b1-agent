@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { sendChatMessage, streamChatMessage, listConversations, getConversation, deleteConversation } from '../api/client'
-import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent } from '../api/types'
+import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent, SSESpArchEvent, SSEProgressEvent } from '../api/types'
 
 export interface DisplayMessage {
   id: string
@@ -10,6 +10,7 @@ export interface DisplayMessage {
   intent: string
   sql: string
   dataMarkdown: string
+  spArchData?: SSESpArchEvent
   explanation: string
   timestamp: Date
 }
@@ -138,10 +139,37 @@ export const useChatStore = defineStore('chat', () => {
     }
     messages.value.push(assistantMsg)
 
+    // Timeout watchdog: if no event arrives within 20s, show error and stop loading
+    let streamTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      if (isLoading.value) {
+        updateAssistant(assistantId, {
+          content: '请求超时 — 后端可能正在处理长时间任务，请检查服务器日志或重试。',
+        })
+        error.value = '流式响应超时（20s），请重试'
+        isLoading.value = false
+        _abortController?.abort()
+        _abortController = null
+      }
+    }, 20000)
+
+    function resetTimeout() {
+      if (streamTimeout) {
+        clearTimeout(streamTimeout)
+        streamTimeout = setTimeout(() => {
+          if (isLoading.value) {
+            updateAssistant(assistantId, {
+              content: '处理时间较长，请耐心等待或检查服务器状态。',
+            })
+          }
+        }, 60000) // After first event, give 60s instead of 20s
+      }
+    }
+
     _abortController = streamChatMessage(
       { message: content, database, conversation_id: activeConversationId.value },
       {
         onIntent: (event: SSEIntentEvent) => {
+          resetTimeout()
           updateAssistant(assistantId, {
             intent: event.intent,
             content: `识别意图: ${event.intent}`,
@@ -152,25 +180,44 @@ export const useChatStore = defineStore('chat', () => {
           }
         },
         onSql: (event: SSESqlEvent) => {
+          resetTimeout()
           updateAssistant(assistantId, {
             sql: event.sql,
             content: `正在执行 SQL...`,
           })
         },
         onData: (event: SSEDataEvent) => {
+          resetTimeout()
           const md = event.markdown || ''
           updateAssistant(assistantId, {
             dataMarkdown: md,
             content: md ? '查询结果已返回' : '处理中...',
           })
         },
+        onSpArch: (event: SSESpArchEvent) => {
+          resetTimeout()
+          console.log('[onSpArch] received:', event.name, 'procedures:', event.procedures?.length)
+          updateAssistant(assistantId, {
+            spArchData: event,
+            intent: 'build_sp',
+            content: `存储过程体系: ${event.name}`,
+          })
+        },
         onExplanation: (event: SSEExplanationEvent) => {
+          resetTimeout()
           updateAssistant(assistantId, {
             explanation: event.text,
             content: event.text,
           })
         },
+        onProgress: (event: SSEProgressEvent) => {
+          resetTimeout()
+          updateAssistant(assistantId, {
+            content: event.message,
+          })
+        },
         onError: (event: SSEErrorEvent) => {
+          if (streamTimeout) { clearTimeout(streamTimeout); streamTimeout = null }
           updateAssistant(assistantId, {
             content: event.error,
           })
@@ -178,6 +225,7 @@ export const useChatStore = defineStore('chat', () => {
           isLoading.value = false
         },
         onDone: () => {
+          if (streamTimeout) { clearTimeout(streamTimeout); streamTimeout = null }
           isLoading.value = false
           _abortController = null
         },
@@ -194,10 +242,16 @@ export const useChatStore = defineStore('chat', () => {
 
   function toDisplayMessage(m: MessageDetail): DisplayMessage {
     let dataMarkdown = ''
+    let spArchData: SSESpArchEvent | undefined
     try {
       if (m.data_json) {
         const parsed = JSON.parse(m.data_json)
-        dataMarkdown = parsed.markdown || ''
+        // Check if this is SP architecture data (has name + procedures)
+        if (parsed.name && parsed.procedures) {
+          spArchData = parsed as SSESpArchEvent
+        } else {
+          dataMarkdown = parsed.markdown || ''
+        }
       }
     } catch { /* ignore parse errors */ }
 
@@ -208,6 +262,7 @@ export const useChatStore = defineStore('chat', () => {
       intent: m.intent,
       sql: m.sql,
       dataMarkdown,
+      spArchData,
       explanation: m.content,
       timestamp: new Date(m.created_at),
     }

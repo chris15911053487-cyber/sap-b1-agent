@@ -1,9 +1,10 @@
 # agent/core.py
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from config.loader import AppConfig, DatabaseConfig
 from database.schema import SchemaCache, get_core_tables, get_related_tables
@@ -12,10 +13,20 @@ from database.executor import execute_query
 from agent.intent import Intent, analyze_intent
 from agent.sql_generator import build_schema_context_prompt, generate_sql
 from agent.interpreter import format_result_as_markdown_table, interpret_query_result
-from agent.sp_builder import build_sp_design_prompt
+from agent.sp_builder import (
+    build_sp_design_prompt,
+    generate_sp_architecture,
+    generate_sp_code,
+    generate_sp_implementation,
+)
 from agent.verifier import VerificationReport, generate_standard_inventory_checks
 
 logger = logging.getLogger(__name__)
+
+
+def _sse(event: str, data: Any) -> dict:
+    """构建 sse-starlette 兼容的 SSE 事件 dict."""
+    return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
 
 
 @dataclass
@@ -45,13 +56,7 @@ class DBAgent:
 
     def process(self, user_input: str, no_execute: bool = False,
                 history: list[dict] | None = None) -> AgentResponse:
-        """处理用户输入，识别意图并路由到对应处理器.
-
-        Args:
-            user_input: 用户的自然语言输入。
-            no_execute: 当为 True 时，仅生成 SQL 但不执行。
-            history: 可选的多轮对话历史（list of dicts, 每项含 role/content/sql/intent）。
-        """
+        """处理用户输入，识别意图并路由到对应处理器."""
         intent_result = analyze_intent(user_input)
         logger.info(
             f"Intent: {intent_result.intent.value} "
@@ -68,22 +73,12 @@ class DBAgent:
             return self._handle_chat(user_input)
 
     async def process_stream(self, user_input: str,
-                             history: list[dict] | None = None) -> AsyncGenerator[str, None]:
-        """异步流式处理用户输入，逐事件 yield SSE 格式字符串。
+                             history: list[dict] | None = None) -> AsyncGenerator[dict, None]:
+        """异步流式处理用户输入，逐事件 yield SSE dict.
 
-        事件类型：
-        - intent: 意图识别结果
-        - sql: 生成的 SQL
-        - data: 查询/校验结果数据
-        - explanation: 中文解读
-        - done: 处理完成
-        - error: 错误信息
-
-        Args:
-            user_input: 用户的自然语言输入。
-            history: 可选的多轮对话历史。
+        每个 yield 的 dict 包含 event 和 data 两个 key，
+        由 sse-starlette 格式化为标准 SSE 事件。
         """
-        import json
         from agent.intent import Intent as IntentEnum, analyze_intent as _analyze
 
         intent_result = _analyze(user_input)
@@ -91,7 +86,7 @@ class DBAgent:
             f"Intent: {intent_result.intent.value} "
             f"(confidence: {intent_result.confidence:.2f})"
         )
-        yield f"event: intent\ndata: {json.dumps({'intent': intent_result.intent.value, 'confidence': intent_result.confidence})}\n\n"
+        yield _sse("intent", {"intent": intent_result.intent.value, "confidence": intent_result.confidence})
 
         if intent_result.intent == IntentEnum.QUERY:
             async for event in self._stream_query(user_input, history=history):
@@ -106,12 +101,10 @@ class DBAgent:
             async for event in self._stream_chat(user_input):
                 yield event
 
-        yield f"event: done\ndata: {{}}\n\n"
+        yield _sse("done", {})
 
     async def _stream_query(self, user_input: str,
-                            history: list[dict] | None = None) -> AsyncGenerator[str, None]:
-        import json
-
+                            history: list[dict] | None = None) -> AsyncGenerator[dict, None]:
         schema_context = self._get_schema_context()
 
         gen_result = generate_sql(
@@ -124,10 +117,10 @@ class DBAgent:
         )
 
         if not gen_result.success:
-            yield f"event: error\ndata: {json.dumps({'error': gen_result.error})}\n\n"
+            yield _sse("error", {"error": gen_result.error})
             return
 
-        yield f"event: sql\ndata: {json.dumps({'sql': gen_result.sql})}\n\n"
+        yield _sse("sql", {"sql": gen_result.sql})
 
         db_name = self.config.agent.default_db
         db_config = self.config.databases.get(db_name)
@@ -142,7 +135,7 @@ class DBAgent:
 
                 if query_result.success:
                     data_table = format_result_as_markdown_table(query_result)
-                    yield f"event: data\ndata: {json.dumps({'markdown': data_table})}\n\n"
+                    yield _sse("data", {"markdown": data_table})
 
                     explanation = interpret_query_result(
                         result=query_result,
@@ -152,48 +145,100 @@ class DBAgent:
                         base_url=self.base_url,
                         history=history,
                     )
-                    yield f"event: explanation\ndata: {json.dumps({'text': explanation})}\n\n"
+                    yield _sse("explanation", {"text": explanation})
                 else:
                     error_msg = f"SQL 执行出错: {query_result.error}"
-                    yield f"event: error\ndata: {json.dumps({'error': error_msg})}\n\n"
+                    yield _sse("error", {"error": error_msg})
             finally:
                 close_connection(conn)
         else:
-            yield f"event: data\ndata: {json.dumps({'markdown': ''})}\n\n"
+            yield _sse("data", {"markdown": ""})
             text = f"SQL 已生成（未连接数据库）:\n```sql\n{gen_result.sql}\n```\n\n{gen_result.explanation}"
-            yield f"event: explanation\ndata: {json.dumps({'text': text})}\n\n"
+            yield _sse("explanation", {"text": text})
 
-    async def _stream_build_sp(self, user_input: str) -> AsyncGenerator[str, None]:
-        import json
+    async def _stream_build_sp(self, user_input: str) -> AsyncGenerator[dict, None]:
+        import asyncio
 
         schema_context = self._get_schema_context()
-        design_prompt = build_sp_design_prompt(
-            requirement=user_input,
+
+        # 1. 调用 LLM 生成 SP 架构设计（在线程池中执行，避免阻塞事件循环）
+        yield _sse("progress", {"stage": "arch", "message": "正在设计存储过程体系架构..."})
+
+        arch_result = await asyncio.to_thread(
+            generate_sp_architecture,
+            user_input=user_input,
             schema_context=schema_context,
+            api_key=self.api_key,
+            model=self.config.agent.model,
+            base_url=self.base_url,
         )
 
+        if not arch_result.success:
+            yield _sse("error", {"error": f"SP 架构生成失败: {arch_result.error}"})
+            return
+
+        arch = arch_result.architecture
+
+        yield _sse("progress", {"stage": "arch_done", "message": f"架构设计完成: {arch.name}，共 {len(arch.procedures)} 个存储过程，开始生成实现代码..."})
+
+        # 2. 为每个 SP 调用 LLM 生成真实 T-SQL 实现代码
+        procedures_data = []
+        for i, spec in enumerate(arch.procedures):
+            yield _sse("progress", {"stage": "impl", "message": f"正在生成 {spec.name} 实现代码 ({i+1}/{len(arch.procedures)})..."})
+
+            # 在线程池中执行 LLM 调用，避免阻塞事件循环
+            impl_body = await asyncio.to_thread(
+                generate_sp_implementation,
+                spec=spec,
+                schema_context=schema_context,
+                api_key=self.api_key,
+                model=self.config.agent.model,
+                base_url=self.base_url,
+            )
+            code = generate_sp_code(spec, implementation_body=impl_body)
+            procedures_data.append({
+                "name": spec.name,
+                "description": spec.description,
+                "dependencies": spec.dependencies,
+                "output_table": spec.output_table,
+                "parameters": spec.parameters,
+                "business_logic": spec.business_logic,
+                "generated_code": code,
+            })
+
+        arch_data = {
+            "name": arch.name,
+            "description": arch.description,
+            "design_notes": arch.design_notes,
+            "procedures": procedures_data,
+            "execution_order": arch.execution_order,
+        }
+
+        yield _sse("sp_arch", arch_data)
+
+        # 3. 生成文本总结
+        exec_order_lines = "\n".join(
+            f"{i+1}. {name}" for i, name in enumerate(arch.execution_order)
+        )
         text = (
-            f"## 存储过程体系设计 Prompt\n\n"
-            f"已根据您的需求构建完整的设计 Prompt，请将以下内容提供给 AI 进行存储过程架构设计:\n\n"
-            f"```\n{design_prompt}\n```\n\n"
-            f"### 后续步骤\n"
-            f"1. 将上述 Prompt 提交给 AI 模型生成 SP 架构设计\n"
-            f"2. 审核生成的 JSON 架构设计\n"
-            f"3. 逐个生成 T-SQL 代码\n"
-            f"4. 在数据库上部署验证"
+            f"## 存储过程体系: {arch.name}\n\n"
+            f"{arch.description}\n\n"
+            f"### 设计说明\n\n{arch.design_notes}\n\n"
+            f"### 包含 {len(arch.procedures)} 个存储过程，执行顺序:\n\n"
+            f"{exec_order_lines}\n\n"
+            f"---\n\n"
+            f"> 点击下方卡片可展开查看每个存储过程的 T-SQL 实现代码。"
         )
-        yield f"event: explanation\ndata: {json.dumps({'text': text})}\n\n"
+        yield _sse("explanation", {"text": text})
 
-    async def _stream_verify(self, user_input: str) -> AsyncGenerator[str, None]:
-        import json
-
+    async def _stream_verify(self, user_input: str) -> AsyncGenerator[dict, None]:
         checks = generate_standard_inventory_checks()
 
         db_name = self.config.agent.default_db
         db_config = self.config.databases.get(db_name)
         if not db_config:
             text = f"## 标准验证方案\n\n已验证检查项: {len(checks)} 项\n\n未连接数据库，请在连接后重试。"
-            yield f"event: explanation\ndata: {json.dumps({'text': text})}\n\n"
+            yield _sse("explanation", {"text": text})
             return
 
         from agent.verifier import VerificationFinding
@@ -234,29 +279,22 @@ class DBAgent:
             }
             for f in report.findings
         ]
-        yield f"event: data\ndata: {json.dumps({'findings': findings_json, 'pass_rate': report.pass_rate, 'total': report.total_checks, 'passed': report.passed, 'failed': report.failed})}\n\n"
-        yield f"event: explanation\ndata: {json.dumps({'text': report.summary_text()})}\n\n"
+        yield _sse("data", {"findings": findings_json, "pass_rate": report.pass_rate, "total": report.total_checks, "passed": report.passed, "failed": report.failed})
+        yield _sse("explanation", {"text": report.summary_text()})
 
-    async def _stream_chat(self, user_input: str) -> AsyncGenerator[str, None]:
-        import json
-
+    async def _stream_chat(self, user_input: str) -> AsyncGenerator[dict, None]:
         result = self._handle_chat(user_input)
-        yield f"event: explanation\ndata: {json.dumps({'text': result.explanation})}\n\n"
+        yield _sse("explanation", {"text": result.explanation})
 
     def _get_schema_context(self, keywords: Optional[list[str]] = None) -> str:
-        """构建当前对话的 Schema 上下文.
-
-        如果提供了关键词，会尝试包含相关的表。
-        """
+        """构建当前对话的 Schema 上下文."""
         tables = {}
-        # 始终包含核心业务表
         always_include = ["OITM", "OCRD", "ORDR", "OINV", "OPOR", "OWOR"]
         for name in always_include:
             schema = self.schema_cache.get(name)
             if schema:
                 tables[name] = schema
 
-        # 尝试根据关键词匹配更多表
         if keywords:
             for kw in keywords:
                 upper = kw.upper()
@@ -273,13 +311,7 @@ class DBAgent:
 
     def _handle_query(self, user_input: str, no_execute: bool = False,
                       history: list[dict] | None = None) -> AgentResponse:
-        """处理自然语言查询.
-
-        Args:
-            user_input: 用户的自然语言查询。
-            no_execute: 为 True 时仅生成 SQL，不执行。
-            history: 可选的多轮对话历史。
-        """
+        """处理自然语言查询."""
         schema_context = self._get_schema_context()
 
         gen_result = generate_sql(
@@ -298,7 +330,6 @@ class DBAgent:
                 error=gen_result.error,
             )
 
-        # --no-execute 模式：跳过数据库执行，仅返回生成的 SQL
         if no_execute:
             return AgentResponse(
                 intent="query",
@@ -311,7 +342,6 @@ class DBAgent:
                 success=True,
             )
 
-        # 获取数据库连接并执行
         db_name = self.config.agent.default_db
         db_config = self.config.databases.get(db_name)
         if db_config:
@@ -357,24 +387,36 @@ class DBAgent:
         """处理存储过程构建请求."""
         schema_context = self._get_schema_context()
 
-        # 调用 build_sp_design_prompt 构建 AI 设计 prompt
-        design_prompt = build_sp_design_prompt(
-            requirement=user_input,
+        arch_result = generate_sp_architecture(
+            user_input=user_input,
             schema_context=schema_context,
+            api_key=self.api_key,
+            model=self.config.agent.model,
+            base_url=self.base_url,
+        )
+
+        if not arch_result.success:
+            return AgentResponse(
+                intent="build_sp",
+                success=False,
+                error=f"SP 架构生成失败: {arch_result.error}",
+            )
+
+        arch = arch_result.architecture
+        exec_order_lines = "\n".join(
+            f"{i+1}. {name}" for i, name in enumerate(arch.execution_order)
         )
 
         return AgentResponse(
             intent="build_sp",
             sql="",
             explanation=(
-                f"## 存储过程体系设计 Prompt\n\n"
-                f"已根据您的需求构建完整的设计 Prompt，请将以下内容提供给 AI 进行存储过程架构设计:\n\n"
-                f"```\n{design_prompt}\n```\n\n"
-                f"### 后续步骤\n"
-                f"1. 将上述 Prompt 提交给 AI 模型生成 SP 架构设计\n"
-                f"2. 审核生成的 JSON 架构设计\n"
-                f"3. 逐个生成 T-SQL 代码\n"
-                f"4. 在数据库上部署验证"
+                f"## 存储过程体系: {arch.name}\n\n"
+                f"{arch.description}\n\n"
+                f"### 设计说明\n\n{arch.design_notes}\n\n"
+                f"### 包含 {len(arch.procedures)} 个存储过程，执行顺序:\n\n"
+                f"{exec_order_lines}\n\n"
+                f"> 可通过流式接口查看每个 SP 的 T-SQL 骨架代码。"
             ),
             success=True,
         )

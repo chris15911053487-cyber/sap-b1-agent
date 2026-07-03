@@ -78,9 +78,15 @@ async def chat_stream(request: StreamChatRequest):
             status_code=503,
         )
 
-    generator = _chat_service.process_message_stream(
-        message=request.message,
-        database=request.database,
-        conversation_id=request.conversation_id,
+    # Wrap generator to ensure X-Accel-Buffering is set for all proxy layers
+    return EventSourceResponse(
+        _chat_service.process_message_stream(
+            message=request.message,
+            database=request.database,
+            conversation_id=request.conversation_id,
+        ),
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+        },
     )
-    return EventSourceResponse(generator)

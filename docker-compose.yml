@@ -22,7 +22,7 @@ services:
     image: sap-b1-agent-frontend:latest
     container_name: sap-b1-nginx
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       - app
     restart: unless-stopped
