@@ -150,6 +150,9 @@ function _dispatchSSE(eventType: string, dataStr: string, callbacks: StreamCallb
       case 'progress':
         callbacks.onProgress?.(data)
         break
+      case 'message_id':
+        callbacks.onMessageId?.(data)
+        break
       case 'done':
         callbacks.onDone?.()
         break

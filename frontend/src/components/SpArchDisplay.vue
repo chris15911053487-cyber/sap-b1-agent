@@ -386,6 +386,8 @@ function getDeployResultIcon(name: string): string {
               <n-tag v-if="r.success" size="tiny" type="success">{{ r.row_count }} 行</n-tag>
               <span class="result-time">{{ r.execution_time_ms.toFixed(0) }}ms</span>
               <n-text v-if="r.error" depth="3" class="result-error">{{ r.error }}</n-text>
+              <!-- Sample output data preview -->
+              <pre v-if="r.sample_output" class="sample-output">{{ r.sample_output }}</pre>
             </div>
           </div>
         </div>
@@ -641,5 +643,22 @@ function getDeployResultIcon(name: string): string {
 
 .verify-section {
   margin-top: 8px;
+}
+
+.sample-output {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: #f6f8fa;
+  border: 1px solid #e1e4e8;
+  border-radius: 4px;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+  color: #333;
 }
 </style>

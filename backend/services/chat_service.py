@@ -220,6 +220,7 @@ class ChatService:
             "intent": "",
             "sql": "",
             "data_markdown": "",
+            "data_json_raw": "",
             "explanation": "",
             "error": "",
         }
@@ -247,7 +248,10 @@ class ChatService:
 
         # Save assistant message to history
         data_json = ""
-        if collected["data_markdown"]:
+        if collected["data_json_raw"]:
+            # sp_arch etc. already serialized
+            data_json = collected["data_json_raw"]
+        elif collected["data_markdown"]:
             try:
                 data_json = json.dumps(
                     {"markdown": collected["data_markdown"]}, ensure_ascii=False
@@ -255,7 +259,7 @@ class ChatService:
             except (TypeError, ValueError):
                 pass
 
-        await self.history.add_message(
+        msg_id = await self.history.add_message(
             conversation_id=conversation_id,
             role="assistant",
             content=collected["explanation"] or collected["error"],
@@ -263,6 +267,12 @@ class ChatService:
             sql=collected["sql"],
             data_json=data_json,
         )
+
+        # Emit the persisted message_id so the frontend can update its local ID
+        yield {
+            "event": "message_id",
+            "data": json.dumps({"message_id": msg_id}, ensure_ascii=False),
+        }
 
     def _collect_event(self, event: dict, collected: dict) -> None:
         """从 SSE dict 事件中提取字段到 collected dict。"""
@@ -289,7 +299,8 @@ class ChatService:
             elif "findings" in payload:
                 collected["data_markdown"] = data_str
         elif event_type == "sp_arch":
-            collected["data_markdown"] = data_str
+            # Store the raw JSON so it can be saved directly as data_json
+            collected["data_json_raw"] = data_str
         elif event_type == "explanation":
             collected["explanation"] = payload.get("text", "")
         elif event_type == "error":

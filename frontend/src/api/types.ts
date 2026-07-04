@@ -172,6 +172,11 @@ export interface SSESpVerifyEvent {
   results: SpVerifyResultItem[]
 }
 
+/** SSE message_id 事件 — 后端持久化后返回真实的消息 ID */
+export interface SSEMessageIdEvent {
+  message_id: string
+}
+
 /** 流式回调 */
 export interface StreamCallbacks {
   onIntent?: (event: SSEIntentEvent) => void
@@ -183,6 +188,7 @@ export interface StreamCallbacks {
   onExplanation?: (event: SSEExplanationEvent) => void
   onError?: (event: SSEErrorEvent) => void
   onProgress?: (event: SSEProgressEvent) => void
+  onMessageId?: (event: SSEMessageIdEvent) => void
   onDone?: () => void
 }
 

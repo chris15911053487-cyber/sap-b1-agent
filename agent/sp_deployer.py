@@ -138,7 +138,12 @@ def _drop_sp(conn: DatabaseConnection, sp_name: str) -> None:
     """Drop an existing stored procedure."""
     raw = _get_raw_conn(conn)
     cursor = raw.cursor()
-    cursor.execute(f"DROP PROCEDURE IF EXISTS [dbo].[{sp_name}]")
+    # Use IF EXISTS...DROP pattern compatible with SQL Server 2012+
+    # (DROP PROCEDURE IF EXISTS requires SQL Server 2016+)
+    cursor.execute(
+        f"IF OBJECT_ID('[dbo].[{sp_name}]', 'P') IS NOT NULL "
+        f"DROP PROCEDURE [dbo].[{sp_name}]"
+    )
     raw.commit()
     logger.info(f"Dropped existing SP: {sp_name}")
 
@@ -347,12 +352,12 @@ def verify_sp(
             rows = cursor.fetchall()
             row_count = len(rows)
 
-            # Build sample output (first 3 rows)
+            # Build sample output (first 10 rows for debugging)
             sample_lines = [" | ".join(str(c) for c in columns)]
             sample_lines.append("-" * len(sample_lines[0]))
-            for row in rows[:3]:
+            for row in rows[:10]:
                 sample_lines.append(" | ".join(str(v) for v in row))
-            if row_count > 3:
+            if row_count > 10:
                 sample_lines.append(f"... (共 {row_count} 行)")
             sample_output = "\n".join(sample_lines)
 

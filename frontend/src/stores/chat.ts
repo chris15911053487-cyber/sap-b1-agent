@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { sendChatMessage, streamChatMessage, listConversations, getConversation, deleteConversation } from '../api/client'
-import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent, SSESpArchEvent, SSESpDeployEvent, SSESpVerifyEvent, SSEProgressEvent } from '../api/types'
+import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent, SSESpArchEvent, SSESpDeployEvent, SSESpVerifyEvent, SSEProgressEvent, SSEMessageIdEvent } from '../api/types'
 
 /** Generate a UUID v4 — works in both secure and insecure contexts. */
 function generateUUID(): string {
@@ -141,7 +141,7 @@ export const useChatStore = defineStore('chat', () => {
     error.value = null
 
     // Create placeholder assistant message
-    const assistantId = generateUUID()
+    let assistantId = generateUUID()
     const assistantMsg: DisplayMessage = {
       id: assistantId,
       role: 'assistant',
@@ -248,6 +248,13 @@ export const useChatStore = defineStore('chat', () => {
           updateAssistant(assistantId, {
             content: event.message,
           })
+        },
+        onMessageId: (event: SSEMessageIdEvent) => {
+          resetTimeout()
+          // Replace the local temporary ID with the persisted backend ID
+          updateAssistant(assistantId, { id: event.message_id })
+          // Update the local reference so subsequent callbacks still find the message
+          assistantId = event.message_id
         },
         onError: (event: SSEErrorEvent) => {
           if (streamTimeout) { clearTimeout(streamTimeout); streamTimeout = null }
