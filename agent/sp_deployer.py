@@ -192,8 +192,13 @@ def deploy_sp(
         # Determine if SP already exists
         exists = _sp_exists(conn, sp_name)
 
-        # Remove the trailing GO statement if present (pymssql doesn't support batch separators)
-        deploy_sql = re.sub(r'\bGO\b\s*$', '', generated_code.strip(), flags=re.IGNORECASE).strip()
+        # Remove ALL GO batch separators (pymssql doesn't support them)
+        # GO must appear on its own line (possibly with whitespace) to avoid matching
+        # identifiers like "CARGO", "CATEGORY_GO", column aliases, etc.
+        deploy_sql = re.sub(
+            r'^\s*GO\s*$', '', generated_code.strip(),
+            flags=re.IGNORECASE | re.MULTILINE,
+        ).strip()
 
         # Drop if exists
         if exists:

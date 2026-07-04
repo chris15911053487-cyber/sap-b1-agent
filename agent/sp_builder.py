@@ -300,6 +300,81 @@ GO
 """
 
 
+def _clean_implementation_body(body: str) -> str:
+    """Post-process LLM-generated implementation body to remove problematic patterns.
+
+    The template (SP_TEMPLATE) already provides:
+      - CREATE PROCEDURE header and parameters
+      - BEGIN / SET NOCOUNT ON
+      - BEGIN TRY / BEGIN TRANSACTION ... COMMIT TRANSACTION / END TRY
+      - BEGIN CATCH ... END CATCH / END
+      - Trailing GO
+
+    So the implementation body should contain ONLY the business logic between
+    BEGIN TRANSACTION and COMMIT TRANSACTION. This function strips out any
+    duplicate wrappers that the LLM might have included despite instructions.
+    """
+    # 1. Remove all GO batch separators (standalone lines)
+    body = re.sub(r'^\s*GO\s*$', '', body, flags=re.IGNORECASE | re.MULTILINE)
+
+    # 2. Remove CREATE PROCEDURE ... AS BEGIN if LLM included a full SP wrapper
+    # This handles cases where the LLM ignores the "don't include header" instruction
+    body = re.sub(
+        r'^\s*CREATE\s+PROCEDURE\s+.*?^BEGIN\s*$',
+        '', body,
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+
+    # 3. Remove SET NOCOUNT ON (already in template)
+    body = re.sub(r'^\s*SET\s+NOCOUNT\s+ON\s*;?\s*$', '', body, flags=re.IGNORECASE | re.MULTILINE)
+
+    # 4. Remove outermost BEGIN TRY / END TRY ... BEGIN CATCH / END CATCH wrapper
+    #    but keep the content inside BEGIN TRY
+    try_match = re.match(
+        r'\s*BEGIN\s+TRY\s*\n(.*?)\n\s*END\s+TRY\s*\n\s*BEGIN\s+CATCH\s*\n.*?END\s+CATCH',
+        body, flags=re.IGNORECASE | re.DOTALL,
+    )
+    if try_match:
+        body = try_match.group(1)
+
+    # 5. Remove outermost BEGIN TRANSACTION / COMMIT TRANSACTION wrapper
+    #    but keep content between them
+    trans_match = re.match(
+        r'\s*BEGIN\s+TRANSACTION\s*;?\s*\n(.*?)\n\s*COMMIT\s+TRANSACTION\s*;?\s*$',
+        body, flags=re.IGNORECASE | re.DOTALL,
+    )
+    if trans_match:
+        body = trans_match.group(1)
+
+    # 6. Remove trailing END that would conflict with template's own END
+    body = re.sub(r'\n\s*END\s*;?\s*$', '', body, flags=re.IGNORECASE)
+
+    # 7. Remove ROLLBACK / re-THROW blocks that duplicate the template's CATCH
+    body = re.sub(
+        r'^\s*IF\s+@@TRANCOUNT\s*>\s*0\s*\n\s*ROLLBACK\s+TRANSACTION\s*;?\s*$',
+        '', body, flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # 8. Remove any INSERT INTO ZZ_SP_LOG statements (template already handles logging)
+    body = re.sub(
+        r'^\s*INSERT\s+INTO\s+ZZ_SP_LOG\s*\(.*?\)\s*VALUES\s*\(.*?\)\s*;?\s*$',
+        '', body, flags=re.IGNORECASE | re.MULTILINE,
+    )
+    # Also handle multi-line INSERT INTO ZZ_SP_LOG
+    body = re.sub(
+        r'^\s*INSERT\s+INTO\s+ZZ_SP_LOG\s*\([^)]*\)\s*\n\s*VALUES\s*\([^)]*\)\s*;?\s*$',
+        '', body, flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # 9. Remove THROW statements that duplicate the template's CATCH
+    body = re.sub(r'^\s*THROW\s*;?\s*$', '', body, flags=re.IGNORECASE | re.MULTILINE)
+
+    # Clean up excessive blank lines
+    body = re.sub(r'\n{3,}', '\n\n', body)
+
+    return body.strip()
+
+
 def build_sp_implementation_prompt(spec: SPSpec, schema_context: str) -> str:
     """构建单个 SP 实现代码生成的 prompt."""
     deps_desc = ""
@@ -350,9 +425,11 @@ def build_sp_implementation_prompt(spec: SPSpec, schema_context: str) -> str:
 # 要求
 1. 只输出 T-SQL 实现体（BEGIN TRANSACTION 到 COMMIT TRANSACTION 之间的代码）
 2. 不要包含 CREATE PROCEDURE 头部、参数声明、或最外层的 BEGIN/END 包装
-3. 代码要可以直接嵌入存储过程模板中
-4. 使用具体的表名和字段名，不要使用占位符
-5. 每个查询步骤添加清晰的注释
+3. 不要包含 BEGIN TRY/BEGIN CATCH 错误处理（模板已提供）
+4. 不要包含 INSERT INTO ZZ_SP_LOG 日志记录（模板已提供）
+5. 代码要可以直接嵌入存储过程模板中
+6. 使用具体的表名和字段名，不要使用占位符
+7. 每个查询步骤添加清晰的注释
 """
 
 
@@ -400,6 +477,12 @@ def generate_sp_implementation(
 
         if not body:
             raise ValueError("LLM returned empty implementation body")
+
+        # Post-process: remove duplicate wrappers and GO statements
+        body = _clean_implementation_body(body)
+
+        if not body:
+            raise ValueError("LLM implementation body is empty after cleanup")
 
         logger.info(f"Generated implementation for {spec.name} ({len(body)} chars)")
         return body
