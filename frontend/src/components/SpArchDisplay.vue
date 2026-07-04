@@ -4,12 +4,16 @@ import hljs from 'highlight.js/lib/core'
 import sql from 'highlight.js/lib/languages/sql'
 import 'highlight.js/styles/github.css'
 import type { SSESpArchEvent } from '../api/types'
-import { deployStoredProcedures } from '../api/client'
+import { deployStoredProcedures, updateMessageData } from '../api/client'
 import type { SpDeployResponse } from '../api/client'
 
 hljs.registerLanguage('sql', sql)
 
-const props = defineProps<{ data: SSESpArchEvent }>()
+const props = defineProps<{
+  data: SSESpArchEvent
+  messageId: string
+  conversationId: string
+}>()
 
 onErrorCaptured((err) => {
   console.error('[SpArchDisplay] render error:', err)
@@ -51,6 +55,46 @@ function toggleEdit(procName: string, code: string) {
 const isDeploying = ref(false)
 const deployResponse = ref<SpDeployResponse | null>(null)
 const deployError = ref<string | null>(null)
+
+// Save state
+const isSaving = ref(false)
+const saveSuccess = ref(false)
+const saveError = ref<string | null>(null)
+
+async function handleSave() {
+  if (!props.conversationId || !props.messageId) {
+    saveError.value = '无法保存：缺少对话信息'
+    return
+  }
+
+  isSaving.value = true
+  saveError.value = null
+  saveSuccess.value = false
+
+  try {
+    // Build updated sp_arch data with edited codes
+    const updatedData = {
+      ...props.data,
+      procedures: procedures.value.map(proc => ({
+        ...proc,
+        generated_code: editableCodes.value[proc.name] || proc.generated_code,
+      })),
+    }
+
+    await updateMessageData(
+      props.conversationId,
+      props.messageId,
+      JSON.stringify(updatedData),
+    )
+
+    saveSuccess.value = true
+    setTimeout(() => { saveSuccess.value = false }, 3000)
+  } catch (e: any) {
+    saveError.value = e?.response?.data?.error?.message || e?.message || '保存失败'
+  } finally {
+    isSaving.value = false
+  }
+}
 
 async function handleDeploy() {
   isDeploying.value = true
@@ -257,16 +301,28 @@ function getDeployResultIcon(name: string): string {
 
     <!-- Deploy Button & Results -->
     <div class="deploy-section">
-      <n-button
-        type="primary"
-        size="large"
-        :loading="isDeploying"
-        :disabled="isDeploying || procedures.length === 0"
-        @click="handleDeploy"
-      >
-        🚀 确认部署全部存储过程
-      </n-button>
+      <div class="action-buttons">
+        <n-button
+          type="primary"
+          size="large"
+          :loading="isDeploying"
+          :disabled="isDeploying || procedures.length === 0"
+          @click="handleDeploy"
+        >
+          🚀 确认部署全部存储过程
+        </n-button>
+        <n-button
+          size="large"
+          :loading="isSaving"
+          :disabled="isSaving"
+          @click="handleSave"
+        >
+          💾 保存修改
+        </n-button>
+      </div>
 
+      <n-alert v-if="saveSuccess" type="success" title="保存成功 — 刷新页面后仍可看到修改" class="deploy-alert" closable />
+      <n-alert v-if="saveError" type="error" :title="saveError" class="deploy-alert" closable />
       <n-alert v-if="deployError" type="error" :title="deployError" class="deploy-alert" closable />
 
       <!-- Deploy Results -->
@@ -499,6 +555,12 @@ function getDeployResultIcon(name: string): string {
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .deploy-alert {

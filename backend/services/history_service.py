@@ -162,3 +162,18 @@ class HistoryService:
         )
         await self._db.commit()
         logger.debug(f"Deleted conversation {conversation_id}")
+
+    async def update_message_data(
+        self, message_id: str, data_json: str
+    ) -> bool:
+        """Update the data_json field of an existing message.
+
+        Used to persist user edits to SP generated code.
+        Returns True if a row was updated.
+        """
+        cursor = await self._db.execute(
+            "UPDATE messages SET data_json = ? WHERE id = ?",
+            (data_json, message_id),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0

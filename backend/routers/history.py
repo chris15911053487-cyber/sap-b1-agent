@@ -79,3 +79,34 @@ async def delete_conversation(conversation_id: str):
 
     await _history_service.delete_conversation(conversation_id)
     return {"deleted": True}
+
+
+class UpdateMessageDataRequest(BaseModel):
+    data_json: str
+
+
+@router.patch("/history/{conversation_id}/messages/{message_id}")
+async def update_message_data(
+    conversation_id: str,
+    message_id: str,
+    request: UpdateMessageDataRequest,
+):
+    """更新消息的 data_json 字段 — 用于保存用户编辑后的 SP 代码."""
+    if _history_service is None:
+        raise AppError(code="SERVICE_NOT_READY", message="History service not initialized.", status_code=503)
+
+    # Verify conversation exists
+    conv = await _history_service.get_conversation(conversation_id)
+    if conv is None:
+        raise AppError(code="NOT_FOUND", message="对话不存在", status_code=404)
+
+    # Verify message belongs to this conversation
+    msg_exists = any(m["id"] == message_id for m in conv.get("messages", []))
+    if not msg_exists:
+        raise AppError(code="NOT_FOUND", message="消息不存在", status_code=404)
+
+    updated = await _history_service.update_message_data(message_id, request.data_json)
+    if not updated:
+        raise AppError(code="UPDATE_FAILED", message="更新失败", status_code=500)
+
+    return {"updated": True}

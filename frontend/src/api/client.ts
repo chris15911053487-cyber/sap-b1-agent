@@ -39,6 +39,10 @@ export async function deleteConversation(id: string): Promise<void> {
   await api.delete(`/history/${id}`)
 }
 
+export async function updateMessageData(conversationId: string, messageId: string, dataJson: string): Promise<void> {
+  await api.patch(`/history/${conversationId}/messages/${messageId}`, { data_json: dataJson })
+}
+
 export async function testConnection(req: ConnectionTestRequest): Promise<ConnectionTestResponse> {
   const { data } = await api.post<ConnectionTestResponse>('/connection/test', req)
   return data

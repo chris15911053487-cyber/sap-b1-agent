@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { watch } from 'vue'
 import type { DisplayMessage } from '../stores/chat'
+import { useChatStore } from '../stores/chat'
 import IntentBadge from './IntentBadge.vue'
 import SpArchDisplay from './SpArchDisplay.vue'
 import SpDeployVerify from './SpDeployVerify.vue'
@@ -9,6 +10,7 @@ import DataTable from './DataTable.vue'
 import Explanation from './Explanation.vue'
 
 const props = defineProps<{ message: DisplayMessage }>()
+const chatStore = useChatStore()
 
 watch(() => props.message.spArchData, (val) => {
   console.log('[ChatMessage] spArchData changed:', val ? `yes (${val.name}, ${val.procedures?.length} procs)` : 'no')
@@ -35,7 +37,7 @@ watch(() => props.message.spArchData, (val) => {
           :deploy-data="message.spDeployData"
           :verify-data="message.spVerifyData"
         />
-        <SpArchDisplay v-if="message.spArchData" :data="message.spArchData" />
+        <SpArchDisplay v-if="message.spArchData" :data="message.spArchData" :message-id="message.id" :conversation-id="chatStore.activeConversationId || ''" />
         <!-- Show raw content when no structured data has arrived yet (e.g. progress/status messages) -->
         <div v-if="!message.sql && !message.dataMarkdown && !message.spArchData && !message.explanation && message.content"
              class="assistant-status">{{ message.content }}</div>
