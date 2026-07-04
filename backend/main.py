@@ -17,7 +17,7 @@ from starlette.requests import Request
 from backend.middleware.error_handler import register_exception_handlers
 from backend.services.history_service import HistoryService
 from backend.services.chat_service import ChatService
-from backend.routers import chat, history, connection, schema, verification, webhook
+from backend.routers import chat, history, connection, schema, verification, webhook, sp
 
 load_dotenv()
 
@@ -151,6 +151,7 @@ app.include_router(connection.router)
 app.include_router(schema.router)
 app.include_router(verification.router)
 app.include_router(webhook.router)
+app.include_router(sp.router)
 
 
 @app.get("/health")

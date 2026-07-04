@@ -159,3 +159,47 @@ export async function runVerification(database: string): Promise<VerifyResponse>
   const { data } = await api.post<VerifyResponse>('/verify', { database })
   return data
 }
+
+/** 手动部署存储过程 */
+export interface SpDeployInput {
+  name: string
+  generated_code: string
+  dependencies: string[]
+  parameters: Record<string, string>
+}
+
+export interface SpDeployRequest {
+  procedures: SpDeployInput[]
+  execution_order: string[]
+  database?: string
+}
+
+export interface SpDeployResponse {
+  deploy_total: number
+  deploy_succeeded: number
+  deploy_failed: number
+  log_table_created: boolean
+  deploy_results: Array<{
+    name: string
+    success: boolean
+    action: string
+    error: string
+    execution_time_ms: number
+  }>
+  verify_total: number
+  verify_passed: number
+  verify_failed: number
+  verify_results: Array<{
+    name: string
+    success: boolean
+    error: string
+    row_count: number
+    execution_time_ms: number
+    sample_output: string
+  }>
+}
+
+export async function deployStoredProcedures(req: SpDeployRequest): Promise<SpDeployResponse> {
+  const { data } = await api.post<SpDeployResponse>('/sp/deploy', req, { timeout: 120000 })
+  return data
+}

@@ -319,6 +319,11 @@ def _clean_implementation_body(body: str) -> str:
 
     # 2. Remove CREATE PROCEDURE ... AS BEGIN if LLM included a full SP wrapper
     # This handles cases where the LLM ignores the "don't include header" instruction
+    _had_create_proc = bool(re.search(
+        r'^\s*CREATE\s+PROCEDURE\s+',
+        body,
+        flags=re.IGNORECASE | re.MULTILINE,
+    ))
     body = re.sub(
         r'^\s*CREATE\s+PROCEDURE\s+.*?^BEGIN\s*$',
         '', body,
@@ -346,8 +351,11 @@ def _clean_implementation_body(body: str) -> str:
     if trans_match:
         body = trans_match.group(1)
 
-    # 6. Remove trailing END that would conflict with template's own END
-    body = re.sub(r'\n\s*END\s*;?\s*$', '', body, flags=re.IGNORECASE)
+    # 6. Remove trailing END only if we stripped a CREATE PROCEDURE wrapper (step 2)
+    #    This END is the outer procedure's closing END and conflicts with the template.
+    #    Do NOT remove trailing END otherwise — it may be a legitimate IF...BEGIN...END.
+    if _had_create_proc:
+        body = re.sub(r'\n\s*END\s*;?\s*$', '', body, flags=re.IGNORECASE)
 
     # 7. Remove ROLLBACK / re-THROW blocks that duplicate the template's CATCH
     body = re.sub(
