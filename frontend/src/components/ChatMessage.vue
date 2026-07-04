@@ -26,10 +26,10 @@ watch(() => props.message.spArchData, (val) => {
       <!-- Assistant message: full structured display -->
       <template v-else>
         <IntentBadge v-if="message.intent" :intent="message.intent" />
-        <SpArchDisplay v-if="message.spArchData" :data="message.spArchData" />
         <SqlBlock v-if="message.sql" :sql="message.sql" />
         <DataTable v-if="message.dataMarkdown" :markdown="message.dataMarkdown" />
         <Explanation v-if="message.explanation" :text="message.explanation" />
+        <SpArchDisplay v-if="message.spArchData" :data="message.spArchData" />
         <!-- Show raw content when no structured data has arrived yet (e.g. progress/status messages) -->
         <div v-if="!message.sql && !message.dataMarkdown && !message.spArchData && !message.explanation && message.content"
              class="assistant-status">{{ message.content }}</div>

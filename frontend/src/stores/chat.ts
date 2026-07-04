@@ -3,6 +3,19 @@ import { ref, computed } from 'vue'
 import { sendChatMessage, streamChatMessage, listConversations, getConversation, deleteConversation } from '../api/client'
 import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent, SSESpArchEvent, SSEProgressEvent } from '../api/types'
 
+/** Generate a UUID v4 — works in both secure and insecure contexts. */
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // Fallback for non-secure contexts (HTTP)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 export interface DisplayMessage {
   id: string
   role: 'user' | 'assistant'
@@ -44,7 +57,7 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(content: string, database: string) {
     // Add user message immediately
     const userMsg: DisplayMessage = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       role: 'user',
       content,
       intent: '',
@@ -72,7 +85,7 @@ export const useChatStore = defineStore('chat', () => {
 
       // Add assistant message
       const assistantMsg: DisplayMessage = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         role: 'assistant',
         content: response.explanation,
         intent: response.intent,
@@ -112,7 +125,7 @@ export const useChatStore = defineStore('chat', () => {
 
     // Add user message immediately
     const userMsg: DisplayMessage = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       role: 'user',
       content,
       intent: '',
@@ -126,7 +139,7 @@ export const useChatStore = defineStore('chat', () => {
     error.value = null
 
     // Create placeholder assistant message
-    const assistantId = crypto.randomUUID()
+    const assistantId = generateUUID()
     const assistantMsg: DisplayMessage = {
       id: assistantId,
       role: 'assistant',

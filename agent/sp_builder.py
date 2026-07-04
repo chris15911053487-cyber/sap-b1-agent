@@ -510,10 +510,10 @@ def generate_sp_architecture(
             )
 
         # 验证必需字段
-        name = data.get("name", "").strip()
-        description = data.get("description", "").strip()
-        design_notes = data.get("design_notes", "").strip()
-        raw_procedures = data.get("procedures", [])
+        name = (data.get("name") or "").strip()
+        description = (data.get("description") or "").strip()
+        design_notes = (data.get("design_notes") or "").strip()
+        raw_procedures = data.get("procedures") or []
 
         if not name:
             raise ValueError("AI response missing required field: 'name'")
@@ -528,12 +528,12 @@ def generate_sp_architecture(
             if not isinstance(p, dict):
                 continue
             spec = SPSpec(
-                name=p.get("name", "").strip(),
-                description=p.get("description", "").strip(),
-                dependencies=p.get("dependencies", []),
-                output_table=p.get("output_table", "").strip(),
-                parameters=p.get("parameters", {}),
-                business_logic=p.get("business_logic", "").strip(),
+                name=(p.get("name") or "").strip(),
+                description=(p.get("description") or "").strip(),
+                dependencies=p.get("dependencies") or [],
+                output_table=(p.get("output_table") or "").strip(),
+                parameters=p.get("parameters") or {},
+                business_logic=(p.get("business_logic") or "").strip(),
             )
             if not spec.name:
                 continue

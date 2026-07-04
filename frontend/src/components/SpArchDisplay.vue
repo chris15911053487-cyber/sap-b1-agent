@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onErrorCaptured } from 'vue'
+import { ref, computed, onErrorCaptured } from 'vue'
 import hljs from 'highlight.js/lib/core'
 import sql from 'highlight.js/lib/languages/sql'
 import 'highlight.js/styles/github.css'
@@ -16,12 +16,34 @@ onErrorCaptured((err) => {
 
 console.log('[SpArchDisplay] mounting with data:', props.data?.name, 'procedures:', props.data?.procedures?.length)
 
+// Safely handle potentially missing fields
+const procedures = computed(() => props.data?.procedures || [])
+const executionOrder = computed(() => props.data?.execution_order || [])
+const designNotes = computed(() => props.data?.design_notes || '')
+
 function highlightCode(code: string): string {
-  return hljs.highlight(code, { language: 'sql' }).value
+  if (!code) return ''
+  try {
+    return hljs.highlight(code, { language: 'sql' }).value
+  } catch {
+    return code
+  }
 }
 
 function copyCode(code: string): Promise<void> {
-  return navigator.clipboard.writeText(code)
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    return navigator.clipboard.writeText(code)
+  }
+  // Fallback for non-secure contexts
+  const textarea = document.createElement('textarea')
+  textarea.value = code
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+  return Promise.resolve()
 }
 
 const copiedStates = ref<Record<string, boolean>>({})
@@ -46,23 +68,23 @@ function statusColor(_name: string): string {
       <template #header>
         <div class="overview-header">
           <n-h3 class="overview-title">{{ data.name }}</n-h3>
-          <n-tag type="info" size="small">共 {{ data.procedures.length }} 个存储过程</n-tag>
+          <n-tag type="info" size="small">共 {{ procedures.length }} 个存储过程</n-tag>
         </div>
       </template>
 
       <n-p class="overview-desc">{{ data.description }}</n-p>
 
-      <n-collapse v-if="data.design_notes" class="design-notes-collapse">
+      <n-collapse v-if="designNotes" class="design-notes-collapse">
         <n-collapse-item title="设计说明" name="design-notes">
-          <n-p class="design-notes-text">{{ data.design_notes }}</n-p>
+          <n-p class="design-notes-text">{{ designNotes }}</n-p>
         </n-collapse-item>
       </n-collapse>
 
-      <div class="exec-order-section">
+      <div v-if="executionOrder.length > 0" class="exec-order-section">
         <n-text strong>执行顺序</n-text>
-        <n-steps :current="data.execution_order.length" size="small" class="exec-steps">
+        <n-steps :current="executionOrder.length" size="small" class="exec-steps">
           <n-step
-            v-for="(name, idx) in data.execution_order"
+            v-for="(name, idx) in executionOrder"
             :key="name"
             :title="`第 ${idx + 1} 步`"
             :description="name"
@@ -75,7 +97,7 @@ function statusColor(_name: string): string {
 
     <!-- Per-Procedure Cards -->
     <n-card
-      v-for="(proc, idx) in data.procedures"
+      v-for="(proc, idx) in procedures"
       :key="proc.name"
       class="procedure-card"
       :bordered="true"
@@ -97,7 +119,7 @@ function statusColor(_name: string): string {
       <div class="proc-meta">
         <div class="meta-row">
           <span class="meta-label">依赖:</span>
-          <span v-if="proc.dependencies.length > 0">
+          <span v-if="proc.dependencies && proc.dependencies.length > 0">
             <n-tag
               v-for="dep in proc.dependencies"
               :key="dep"
@@ -121,7 +143,7 @@ function statusColor(_name: string): string {
         </div>
 
         <!-- Parameters -->
-        <div v-if="Object.keys(proc.parameters).length > 0" class="meta-row">
+        <div v-if="proc.parameters && Object.keys(proc.parameters).length > 0" class="meta-row">
           <span class="meta-label">参数:</span>
           <n-table :single-line="true" size="small" class="params-table">
             <thead>
@@ -141,14 +163,14 @@ function statusColor(_name: string): string {
       </div>
 
       <!-- Business Logic (collapsible) -->
-      <n-collapse class="proc-collapse">
+      <n-collapse v-if="proc.business_logic" class="proc-collapse">
         <n-collapse-item title="业务逻辑" name="logic">
           <n-p class="business-logic-text">{{ proc.business_logic }}</n-p>
         </n-collapse-item>
       </n-collapse>
 
       <!-- T-SQL Code (collapsible) -->
-      <n-collapse class="proc-collapse">
+      <n-collapse v-if="proc.generated_code" class="proc-collapse">
         <n-collapse-item title="T-SQL 代码" name="code">
           <div class="code-block">
             <div class="code-header">
