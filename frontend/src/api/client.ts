@@ -131,6 +131,12 @@ function _dispatchSSE(eventType: string, dataStr: string, callbacks: StreamCallb
       case 'sp_arch':
         callbacks.onSpArch?.(data)
         break
+      case 'sp_deploy':
+        callbacks.onSpDeploy?.(data)
+        break
+      case 'sp_verify':
+        callbacks.onSpVerify?.(data)
+        break
       case 'explanation':
         callbacks.onExplanation?.(data)
         break

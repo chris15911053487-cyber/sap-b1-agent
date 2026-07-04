@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { sendChatMessage, streamChatMessage, listConversations, getConversation, deleteConversation } from '../api/client'
-import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent, SSESpArchEvent, SSEProgressEvent } from '../api/types'
+import type { ConversationSummary, MessageDetail, ChatResponse, SSEIntentEvent, SSESqlEvent, SSEDataEvent, SSEExplanationEvent, SSEErrorEvent, SSESpArchEvent, SSESpDeployEvent, SSESpVerifyEvent, SSEProgressEvent } from '../api/types'
 
 /** Generate a UUID v4 — works in both secure and insecure contexts. */
 function generateUUID(): string {
@@ -24,6 +24,8 @@ export interface DisplayMessage {
   sql: string
   dataMarkdown: string
   spArchData?: SSESpArchEvent
+  spDeployData?: SSESpDeployEvent
+  spVerifyData?: SSESpVerifyEvent
   explanation: string
   timestamp: Date
 }
@@ -214,6 +216,24 @@ export const useChatStore = defineStore('chat', () => {
             spArchData: event,
             intent: 'build_sp',
             content: `存储过程体系: ${event.name}`,
+          })
+        },
+        onSpDeploy: (event: SSESpDeployEvent) => {
+          resetTimeout()
+          updateAssistant(assistantId, {
+            spDeployData: event,
+            content: event.failed === 0
+              ? `✅ 全部 ${event.succeeded} 个存储过程部署成功`
+              : `⚠️ 部署完成: ${event.succeeded} 成功, ${event.failed} 失败`,
+          })
+        },
+        onSpVerify: (event: SSESpVerifyEvent) => {
+          resetTimeout()
+          updateAssistant(assistantId, {
+            spVerifyData: event,
+            content: event.failed === 0
+              ? `✅ 全部 ${event.passed} 个存储过程验证通过`
+              : `⚠️ 验证完成: ${event.passed} 通过, ${event.failed} 失败`,
           })
         },
         onExplanation: (event: SSEExplanationEvent) => {

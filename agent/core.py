@@ -158,6 +158,7 @@ class DBAgent:
 
     async def _stream_build_sp(self, user_input: str) -> AsyncGenerator[dict, None]:
         import asyncio
+        from agent.sp_deployer import deploy_sp_batch, verify_sp_batch
 
         schema_context = self._get_schema_context()
 
@@ -216,18 +217,121 @@ class DBAgent:
 
         yield _sse("sp_arch", arch_data)
 
-        # 3. 生成文本总结
+        # 3. 自动部署 — 执行 CREATE PROCEDURE
+        db_name = self.config.agent.default_db
+        db_config = self.config.databases.get(db_name)
+
+        deploy_report = None
+        verify_report = None
+
+        if db_config:
+            yield _sse("progress", {"stage": "deploy", "message": "正在部署存储过程到数据库..."})
+
+            deploy_report = await asyncio.to_thread(
+                deploy_sp_batch,
+                db_config=db_config,
+                procedures=procedures_data,
+                execution_order=arch.execution_order,
+            )
+
+            # Emit deploy results
+            deploy_data = {
+                "total": deploy_report.total,
+                "succeeded": deploy_report.succeeded,
+                "failed": deploy_report.failed,
+                "log_table_created": deploy_report.log_table_created,
+                "results": [
+                    {
+                        "name": r.name,
+                        "success": r.success,
+                        "action": r.action,
+                        "error": r.error,
+                        "execution_time_ms": r.execution_time_ms,
+                    }
+                    for r in deploy_report.results
+                ],
+            }
+            yield _sse("sp_deploy", deploy_data)
+
+            # 4. 自动验证 — EXEC @Debug=1 测试
+            if deploy_report.succeeded > 0:
+                yield _sse("progress", {"stage": "verify", "message": "正在验证存储过程执行结果..."})
+
+                # Only verify successfully deployed SPs
+                deployed_names = [r.name for r in deploy_report.results if r.success]
+                deployed_procs = [p for p in procedures_data if p["name"] in deployed_names]
+                deployed_order = [n for n in arch.execution_order if n in deployed_names]
+
+                verify_report = await asyncio.to_thread(
+                    verify_sp_batch,
+                    db_config=db_config,
+                    procedures=deployed_procs,
+                    execution_order=deployed_order,
+                )
+
+                # Emit verify results
+                verify_data = {
+                    "total": verify_report.total,
+                    "passed": verify_report.passed,
+                    "failed": verify_report.failed,
+                    "results": [
+                        {
+                            "name": r.name,
+                            "success": r.success,
+                            "error": r.error,
+                            "row_count": r.row_count,
+                            "execution_time_ms": r.execution_time_ms,
+                            "sample_output": r.sample_output,
+                        }
+                        for r in verify_report.results
+                    ],
+                }
+                yield _sse("sp_verify", verify_data)
+
+        # 5. 生成文本总结
         exec_order_lines = "\n".join(
             f"{i+1}. {name}" for i, name in enumerate(arch.execution_order)
         )
+
+        # Build summary based on deploy/verify status
+        deploy_summary = ""
+        if deploy_report:
+            if deploy_report.failed == 0:
+                deploy_summary = f"\n\n### ✅ 部署完成\n\n全部 {deploy_report.succeeded} 个存储过程已成功部署到数据库。"
+            else:
+                deploy_summary = (
+                    f"\n\n### ⚠️ 部署结果\n\n"
+                    f"成功: {deploy_report.succeeded} / 失败: {deploy_report.failed}\n\n"
+                )
+                for r in deploy_report.results:
+                    if not r.success:
+                        deploy_summary += f"- ❌ `{r.name}`: {r.error}\n"
+        else:
+            deploy_summary = "\n\n### ⚠️ 未部署\n\n未配置数据库连接，存储过程代码已生成但未自动部署。"
+
+        verify_summary = ""
+        if verify_report:
+            if verify_report.failed == 0:
+                verify_summary = f"\n\n### ✅ 验证通过\n\n全部 {verify_report.passed} 个存储过程执行测试通过（@Debug=1 模式）。"
+            else:
+                verify_summary = (
+                    f"\n\n### ⚠️ 验证结果\n\n"
+                    f"通过: {verify_report.passed} / 失败: {verify_report.failed}\n\n"
+                )
+                for r in verify_report.results:
+                    if not r.success:
+                        verify_summary += f"- ❌ `{r.name}`: {r.error}\n"
+
         text = (
             f"## 存储过程体系: {arch.name}\n\n"
             f"{arch.description}\n\n"
             f"### 设计说明\n\n{arch.design_notes}\n\n"
             f"### 包含 {len(arch.procedures)} 个存储过程，执行顺序:\n\n"
-            f"{exec_order_lines}\n\n"
+            f"{exec_order_lines}"
+            f"{deploy_summary}"
+            f"{verify_summary}\n\n"
             f"---\n\n"
-            f"> 点击下方卡片可展开查看每个存储过程的 T-SQL 实现代码。"
+            f"> 点击下方卡片可展开查看每个存储过程的详细信息和 T-SQL 代码。"
         )
         yield _sse("explanation", {"text": text})
 

@@ -3,6 +3,7 @@ import { watch } from 'vue'
 import type { DisplayMessage } from '../stores/chat'
 import IntentBadge from './IntentBadge.vue'
 import SpArchDisplay from './SpArchDisplay.vue'
+import SpDeployVerify from './SpDeployVerify.vue'
 import SqlBlock from './SqlBlock.vue'
 import DataTable from './DataTable.vue'
 import Explanation from './Explanation.vue'
@@ -29,6 +30,11 @@ watch(() => props.message.spArchData, (val) => {
         <SqlBlock v-if="message.sql" :sql="message.sql" />
         <DataTable v-if="message.dataMarkdown" :markdown="message.dataMarkdown" />
         <Explanation v-if="message.explanation" :text="message.explanation" />
+        <SpDeployVerify
+          v-if="message.spDeployData || message.spVerifyData"
+          :deploy-data="message.spDeployData"
+          :verify-data="message.spVerifyData"
+        />
         <SpArchDisplay v-if="message.spArchData" :data="message.spArchData" />
         <!-- Show raw content when no structured data has arrived yet (e.g. progress/status messages) -->
         <div v-if="!message.sql && !message.dataMarkdown && !message.spArchData && !message.explanation && message.content"

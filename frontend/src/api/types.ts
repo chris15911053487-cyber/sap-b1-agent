@@ -136,12 +136,50 @@ export interface SSESpArchEvent {
   execution_order: string[]
 }
 
+/** SP 部署 — 单个结果 */
+export interface SpDeployResultItem {
+  name: string
+  success: boolean
+  action: string  // "created" | "replaced" | "skipped" | "failed"
+  error: string
+  execution_time_ms: number
+}
+
+/** SSE sp_deploy 事件 */
+export interface SSESpDeployEvent {
+  total: number
+  succeeded: number
+  failed: number
+  log_table_created: boolean
+  results: SpDeployResultItem[]
+}
+
+/** SP 验证 — 单个结果 */
+export interface SpVerifyResultItem {
+  name: string
+  success: boolean
+  error: string
+  row_count: number
+  execution_time_ms: number
+  sample_output: string
+}
+
+/** SSE sp_verify 事件 */
+export interface SSESpVerifyEvent {
+  total: number
+  passed: number
+  failed: number
+  results: SpVerifyResultItem[]
+}
+
 /** 流式回调 */
 export interface StreamCallbacks {
   onIntent?: (event: SSEIntentEvent) => void
   onSql?: (event: SSESqlEvent) => void
   onData?: (event: SSEDataEvent) => void
   onSpArch?: (event: SSESpArchEvent) => void
+  onSpDeploy?: (event: SSESpDeployEvent) => void
+  onSpVerify?: (event: SSESpVerifyEvent) => void
   onExplanation?: (event: SSEExplanationEvent) => void
   onError?: (event: SSEErrorEvent) => void
   onProgress?: (event: SSEProgressEvent) => void
