@@ -4,7 +4,8 @@ import hljs from 'highlight.js/lib/core'
 import sql from 'highlight.js/lib/languages/sql'
 import 'highlight.js/styles/github.css'
 import type { SSESpArchEvent } from '../api/types'
-import { deployStoredProcedures, updateMessageData } from '../api/client'
+import type { SpValidateResponse, SpRepairResponse, ValidationReportItem, VerificationCheckDef } from '../api/types'
+import { deployStoredProcedures, updateMessageData, validateStoredProcedures, repairStoredProcedure } from '../api/client'
 import type { SpDeployResponse } from '../api/client'
 
 hljs.registerLanguage('sql', sql)
@@ -160,6 +161,89 @@ function getDeployResultIcon(name: string): string {
   const r = deployResponse.value.deploy_results.find(r => r.name === name)
   if (!r) return ''
   return r.success ? '✅' : '❌'
+}
+
+// ---------------------------------------------------------------------------
+// 业务对账验证 + AI 自修复
+// ---------------------------------------------------------------------------
+
+// 是否有任何 SP 配置了业务对账断言
+const hasVerificationChecks = computed(() =>
+  procedures.value.some(p => (p.verification_checks?.length || 0) > 0)
+)
+
+const isValidating = ref(false)
+const validateResponse = ref<SpValidateResponse | null>(null)
+const validateError = ref<string | null>(null)
+
+// 每个 SP 的修复状态
+const repairingState = ref<Record<string, boolean>>({})
+const repairResults = ref<Record<string, SpRepairResponse>>({})
+const repairError = ref<Record<string, string>>({})
+
+async function handleValidate() {
+  isValidating.value = true
+  validateError.value = null
+  validateResponse.value = null
+
+  try {
+    const input = procedures.value
+      .filter(p => (p.verification_checks?.length || 0) > 0)
+      .map(p => ({
+        name: p.name,
+        verification_checks: (p.verification_checks || []) as VerificationCheckDef[],
+      }))
+
+    validateResponse.value = await validateStoredProcedures(input)
+  } catch (e: any) {
+    validateError.value = e?.response?.data?.error?.message || e?.message || '验证请求失败'
+  } finally {
+    isValidating.value = false
+  }
+}
+
+async function handleRepair(spName: string) {
+  const proc = procedures.value.find(p => p.name === spName)
+  if (!proc) return
+
+  repairingState.value[spName] = true
+  repairError.value[spName] = ''
+
+  try {
+    const result = await repairStoredProcedure(
+      {
+        name: proc.name,
+        description: proc.description,
+        output_table: proc.output_table,
+        business_logic: proc.business_logic,
+        parameters: proc.parameters || {},
+        generated_code: editableCodes.value[proc.name] || proc.generated_code,
+        verification_checks: (proc.verification_checks || []) as VerificationCheckDef[],
+      },
+      undefined,
+      3,
+    )
+    repairResults.value[spName] = result
+
+    // 修复成功后，用最终代码更新可编辑代码
+    if (result.success && result.final_code) {
+      editableCodes.value[spName] = result.final_code
+    }
+    // 用修复得到的 final_report 覆盖展示
+    if (validateResponse.value && result.final_report && 'sp_name' in result.final_report) {
+      const idx = validateResponse.value.reports.findIndex(r => r.sp_name === spName)
+      const finalReport = result.final_report as ValidationReportItem
+      if (idx !== -1) {
+        validateResponse.value.reports[idx] = finalReport
+      } else {
+        validateResponse.value.reports.push(finalReport)
+      }
+    }
+  } catch (e: any) {
+    repairError.value[spName] = e?.response?.data?.error?.message || e?.message || '修复请求失败'
+  } finally {
+    repairingState.value[spName] = false
+  }
 }
 </script>
 
@@ -319,11 +403,22 @@ function getDeployResultIcon(name: string): string {
         >
           💾 保存修改
         </n-button>
+        <n-button
+          v-if="hasVerificationChecks"
+          type="info"
+          size="large"
+          :loading="isValidating"
+          :disabled="isValidating"
+          @click="handleValidate"
+        >
+          🔍 运行业务对账验证
+        </n-button>
       </div>
 
       <n-alert v-if="saveSuccess" type="success" title="保存成功 — 刷新页面后仍可看到修改" class="deploy-alert" closable />
       <n-alert v-if="saveError" type="error" :title="saveError" class="deploy-alert" closable />
       <n-alert v-if="deployError" type="error" :title="deployError" class="deploy-alert" closable />
+      <n-alert v-if="validateError" type="error" :title="validateError" class="deploy-alert" closable />
 
       <!-- Deploy Results -->
       <n-card v-if="deployResponse" class="deploy-result-card" :bordered="true" size="small">
@@ -389,6 +484,105 @@ function getDeployResultIcon(name: string): string {
               <!-- Sample output data preview -->
               <pre v-if="r.sample_output" class="sample-output">{{ r.sample_output }}</pre>
             </div>
+          </div>
+        </div>
+      </n-card>
+
+      <!-- 业务对账验证结果 -->
+      <n-card v-if="validateResponse" class="validate-result-card" :bordered="true" size="small">
+        <template #header>
+          <div class="section-header">
+            <span class="section-icon">🔍</span>
+            <span class="section-title">业务对账验证</span>
+            <n-tag
+              :type="validateResponse.has_error_failures ? 'error' : (validateResponse.total_failed > 0 ? 'warning' : 'success')"
+              size="small"
+            >
+              {{ validateResponse.total_passed }}/{{ validateResponse.total_checks }} 通过
+            </n-tag>
+          </div>
+        </template>
+
+        <div v-if="validateResponse.reports.length === 0" class="empty-hint">
+          <n-text depth="3">没有可运行的业务对账断言</n-text>
+        </div>
+
+        <!-- 每个 SP 的验证报告 -->
+        <div v-for="report in validateResponse.reports" :key="report.sp_name" class="sp-report">
+          <div class="sp-report-header">
+            <span class="sp-report-icon">{{ report.has_error_failures ? '❌' : (report.failed > 0 ? '⚠️' : '✅') }}</span>
+            <span class="sp-report-name">{{ report.sp_name }}</span>
+            <n-tag size="tiny" :type="report.has_error_failures ? 'error' : (report.failed > 0 ? 'warning' : 'success')">
+              {{ report.passed }}/{{ report.total }} 通过
+            </n-tag>
+            <!-- AI 自动修复按钮 -->
+            <n-button
+              v-if="report.has_error_failures"
+              size="tiny"
+              type="warning"
+              class="repair-btn"
+              :loading="repairingState[report.sp_name]"
+              :disabled="repairingState[report.sp_name]"
+              @click="handleRepair(report.sp_name)"
+            >
+              🤖 让 AI 自动修复
+            </n-button>
+          </div>
+
+          <!-- 每条断言结果 -->
+          <div class="check-list">
+            <div
+              v-for="check in report.results"
+              :key="check.name"
+              class="check-item"
+              :class="{ passed: check.passed, failed: !check.passed }"
+            >
+              <div class="check-row">
+                <span class="check-icon">{{ check.passed ? '✅' : (check.severity === 'error' ? '❌' : '⚠️') }}</span>
+                <span class="check-name">{{ check.name }}</span>
+                <n-tag size="tiny" :bordered="false">{{ check.category }}</n-tag>
+                <n-tag v-if="check.severity === 'warning'" size="tiny" type="warning" :bordered="false">warning</n-tag>
+              </div>
+              <div v-if="check.description" class="check-desc">{{ check.description }}</div>
+              <div class="check-detail" :class="{ 'detail-fail': !check.passed }">{{ check.detail }}</div>
+              <div v-if="check.assertion" class="check-assertion">
+                <code>期望: {{ check.assertion }}</code>
+              </div>
+            </div>
+          </div>
+
+          <!-- 修复错误提示 -->
+          <n-alert v-if="repairError[report.sp_name]" type="error" :title="repairError[report.sp_name]" class="deploy-alert" closable />
+
+          <!-- 修复迭代过程 -->
+          <div v-if="repairResults[report.sp_name]" class="repair-result">
+            <n-divider dashed />
+            <div class="repair-header">
+              <span>{{ repairResults[report.sp_name].success ? '✅' : '⚠️' }}</span>
+              <span class="repair-message">{{ repairResults[report.sp_name].message }}</span>
+            </div>
+            <n-collapse>
+              <n-collapse-item
+                v-for="it in repairResults[report.sp_name].iterations"
+                :key="it.iteration"
+                :title="`第 ${it.iteration} 次修复 ${it.passed ? '✅ 通过' : (it.deploy_success ? '❌ 仍未通过' : '部署失败')}`"
+                :name="it.iteration"
+              >
+                <div v-if="it.llm_error" class="repair-err">AI 生成失败: {{ it.llm_error }}</div>
+                <div v-if="it.deploy_error" class="repair-err">部署错误: {{ it.deploy_error }}</div>
+                <div v-if="it.validation_report && it.validation_report.results" class="repair-checks">
+                  <div
+                    v-for="c in it.validation_report.results"
+                    :key="c.name"
+                    class="check-mini"
+                    :class="{ passed: c.passed, failed: !c.passed }"
+                  >
+                    {{ c.passed ? '✅' : '❌' }} {{ c.name }} — {{ c.detail }}
+                  </div>
+                </div>
+                <pre v-if="it.generated_code" class="code-preview repair-code"><code class="language-sql" v-html="highlightCode(it.generated_code)"></code></pre>
+              </n-collapse-item>
+            </n-collapse>
           </div>
         </div>
       </n-card>
@@ -660,5 +854,133 @@ function getDeployResultIcon(name: string): string {
   max-height: 200px;
   overflow-y: auto;
   color: #333;
+}
+
+/* 业务对账验证 */
+.validate-result-card {
+  width: 100%;
+  border-left: 3px solid #2080f0;
+  margin-top: 12px;
+}
+
+.empty-hint {
+  padding: 8px 0;
+}
+
+.sp-report {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  background: #fafbfc;
+}
+
+.sp-report-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sp-report-name {
+  font-family: 'Courier New', monospace;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.repair-btn {
+  margin-left: auto;
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.check-item {
+  padding: 6px 10px;
+  border-radius: 4px;
+  border-left: 3px solid #d0d7de;
+}
+
+.check-item.passed {
+  background: #f6ffed;
+  border-left-color: #52c41a;
+}
+
+.check-item.failed {
+  background: #fff2f0;
+  border-left-color: #ff4d4f;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.check-name {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.check-desc {
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.check-detail {
+  font-size: 12px;
+  color: #444;
+  margin-top: 2px;
+}
+
+.check-detail.detail-fail {
+  color: #d4380d;
+  font-weight: 500;
+}
+
+.check-assertion {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #888;
+}
+
+.repair-result {
+  margin-top: 8px;
+}
+
+.repair-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.repair-message {
+  color: #444;
+}
+
+.repair-err {
+  color: #ff4d4f;
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.check-mini {
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.check-mini.failed {
+  color: #d4380d;
+}
+
+.repair-code {
+  margin-top: 8px;
 }
 </style>

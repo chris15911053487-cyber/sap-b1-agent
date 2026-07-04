@@ -10,6 +10,9 @@ import type {
   TableInfo,
   StreamCallbacks,
   VerifyResponse,
+  VerificationCheckDef,
+  SpValidateResponse,
+  SpRepairResponse,
 } from './types'
 
 const api = axios.create({
@@ -208,5 +211,47 @@ export interface SpDeployResponse {
 
 export async function deployStoredProcedures(req: SpDeployRequest): Promise<SpDeployResponse> {
   const { data } = await api.post<SpDeployResponse>('/sp/deploy', req, { timeout: 120000 })
+  return data
+}
+
+/** 运行业务对账断言验证 */
+export interface SpValidateProcInput {
+  name: string
+  verification_checks: VerificationCheckDef[]
+}
+
+export async function validateStoredProcedures(
+  procedures: SpValidateProcInput[],
+  database?: string,
+): Promise<SpValidateResponse> {
+  const { data } = await api.post<SpValidateResponse>(
+    '/sp/validate',
+    { procedures, database: database || '' },
+    { timeout: 120000 },
+  )
+  return data
+}
+
+/** 触发 AI 自修复循环 */
+export interface SpRepairProcInput {
+  name: string
+  description?: string
+  output_table?: string
+  business_logic?: string
+  parameters?: Record<string, string>
+  generated_code: string
+  verification_checks: VerificationCheckDef[]
+}
+
+export async function repairStoredProcedure(
+  procedure: SpRepairProcInput,
+  database?: string,
+  maxIterations = 3,
+): Promise<SpRepairResponse> {
+  const { data } = await api.post<SpRepairResponse>(
+    '/sp/repair',
+    { procedure, database: database || '', max_iterations: maxIterations },
+    { timeout: 300000 },
+  )
   return data
 }

@@ -203,6 +203,7 @@ class DBAgent:
                 "output_table": spec.output_table,
                 "parameters": spec.parameters,
                 "business_logic": spec.business_logic,
+                "verification_checks": spec.verification_checks,
                 "generated_code": code,
             })
 

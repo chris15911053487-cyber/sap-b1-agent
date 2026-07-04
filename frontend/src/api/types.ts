@@ -125,6 +125,70 @@ export interface SpArchProcedure {
   parameters: Record<string, string>
   business_logic: string
   generated_code: string
+  verification_checks?: VerificationCheckDef[]
+}
+
+/** 业务对账断言定义 */
+export interface VerificationCheckDef {
+  name: string
+  description: string
+  category: string
+  check_sql: string
+  assertion: string
+  severity: string
+}
+
+/** 单条断言的验证结果 */
+export interface CheckResultItem {
+  name: string
+  description: string
+  category: string
+  severity: string
+  passed: boolean
+  assertion: string
+  actual_values: Record<string, any>
+  detail: string
+  check_sql: string
+}
+
+/** 一个 SP 的业务对账验证报告 */
+export interface ValidationReportItem {
+  sp_name: string
+  total: number
+  passed: number
+  failed: number
+  has_error_failures: boolean
+  results: CheckResultItem[]
+}
+
+/** POST /api/sp/validate 响应 */
+export interface SpValidateResponse {
+  reports: ValidationReportItem[]
+  total_checks: number
+  total_passed: number
+  total_failed: number
+  has_error_failures: boolean
+}
+
+/** 修复循环单次迭代 */
+export interface SpRepairIteration {
+  iteration: number
+  generated_code: string
+  deploy_success: boolean
+  deploy_error: string
+  validation_report: ValidationReportItem | Record<string, never>
+  passed: boolean
+  llm_error: string
+}
+
+/** POST /api/sp/repair 响应 */
+export interface SpRepairResponse {
+  sp_name: string
+  success: boolean
+  message: string
+  iterations: SpRepairIteration[]
+  final_code: string
+  final_report: ValidationReportItem | Record<string, never>
 }
 
 /** SSE sp_arch 事件 */

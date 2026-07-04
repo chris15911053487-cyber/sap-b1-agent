@@ -144,6 +144,8 @@ class SPSpec:
     output_table: str = ""
     parameters: dict[str, str] = field(default_factory=dict)
     business_logic: str = ""
+    # 业务对账断言 — 每项含 name/description/category/check_sql/assertion/severity
+    verification_checks: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -188,6 +190,30 @@ class SPArchitectureResult:
     architecture: Optional[SPArchitecture] = None
     success: bool = True
     error: str = ""
+
+def _normalize_checks(raw) -> list[dict]:
+    """规范化 LLM 返回的 verification_checks，过滤无效项."""
+    if not isinstance(raw, list):
+        return []
+    checks: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        check_sql = (item.get("check_sql") or "").strip()
+        assertion = (item.get("assertion") or "").strip()
+        # 必须同时有 check_sql 和 assertion 才是有效断言
+        if not check_sql or not assertion:
+            continue
+        checks.append({
+            "name": (item.get("name") or "未命名检查").strip(),
+            "description": (item.get("description") or "").strip(),
+            "category": (item.get("category") or "对账").strip(),
+            "check_sql": check_sql,
+            "assertion": assertion,
+            "severity": (item.get("severity") or "error").strip().lower(),
+        })
+    return checks
+
 
 
 def _extract_json_balanced(text: str) -> dict | None:
@@ -245,10 +271,35 @@ def build_sp_design_prompt(requirement: str, schema_context: str) -> str:
       "dependencies": ["SP_前置名称"],
       "output_table": "ZZ_输出表名",
       "parameters": {{"@Period": "VARCHAR(7)"}},
-      "business_logic": "详细的业务逻辑描述，供后续代码生成使用"
+      "business_logic": "详细的业务逻辑描述，供后续代码生成使用",
+      "verification_checks": [
+        {{
+          "name": "对账检查名称",
+          "description": "这条检查验证什么业务规则",
+          "category": "对账",
+          "check_sql": "SELECT ... 返回单行、列名清晰的聚合结果",
+          "assertion": "引用 check_sql 返回列名的布尔表达式",
+          "severity": "error"
+        }}
+      ]
     }}
   ]
 }}
+
+# 业务对账断言规范（verification_checks）— 非常重要
+每个 SP 必须附带 1-4 条**业务对账断言**，用于在 SP 运行后自动验证数据正确性。要求:
+- **check_sql**: 必须是 SELECT 查询，返回**单行**结果，列名要清晰（用 AS 别名）。可跨表勾稽。
+- **assertion**: 一个 Python 布尔表达式，只能引用 check_sql 返回的列名。支持的函数: abs, round, min, max。
+  例如返回列 `inv_value` 和 `gl_value` 时: `abs(inv_value - gl_value) / gl_value < 0.01`
+  例如返回列 `neg_cnt` 时: `neg_cnt == 0`
+- **category**: "对账"(跨表勾稽) | "完整性"(非空/无NULL) | "合理性"(无负值/范围)
+- **severity**: "error"(必须通过) | "warning"(建议通过)
+
+# 业务对账断言示例（SAP B1 场景）
+- 库存金额勾稽总账: check_sql 同时算出物料库存总值和总账1开头科目余额, assertion 判断差异<1%
+- 输出表非空: SELECT COUNT(*) AS cnt FROM ZZ_输出表, assertion: cnt > 0
+- 无负成本: SELECT COUNT(*) AS neg_cnt FROM ZZ_输出表 WHERE UnitCost < 0, assertion: neg_cnt == 0
+- 借贷平衡: SELECT SUM(Debit) AS d, SUM(Credit) AS c FROM ..., assertion: abs(d - c) < 0.01
 """
 
 
@@ -512,6 +563,116 @@ def generate_sp_implementation(
         return "\n".join(fallback_lines)
 
 
+def build_repair_prompt(
+    spec: SPSpec,
+    current_code: str,
+    failed_checks: list[dict],
+    schema_context: str,
+) -> str:
+    """构建 AI 自修复的 prompt — 把失败的业务对账断言 + 实际值反馈给 LLM."""
+    failure_lines = []
+    for i, fc in enumerate(failed_checks, 1):
+        actual = fc.get("actual_values") or {}
+        actual_str = ", ".join(f"{k}={v}" for k, v in actual.items()) or "（无返回值）"
+        failure_lines.append(
+            f"{i}. 检查名称: {fc.get('name', '')}\n"
+            f"   业务规则: {fc.get('description', '')}\n"
+            f"   对账 SQL: {fc.get('check_sql', '')}\n"
+            f"   期望条件(assertion): {fc.get('assertion', '')}\n"
+            f"   实际返回值: {actual_str}\n"
+            f"   失败原因: {fc.get('detail', '')}"
+        )
+    failures_text = "\n\n".join(failure_lines)
+
+    return f"""你是一位资深的 SAP Business One T-SQL 专家。你之前生成的存储过程运行后，业务对账验证**未通过**，需要你修正实现代码。
+
+# 数据库 Schema
+{schema_context}
+
+# 存储过程规格
+**名称**: {spec.name}
+**功能描述**: {spec.description}
+**输出表**: {spec.output_table or '无'}
+**业务逻辑**:
+{spec.business_logic}
+
+# 当前存储过程完整代码
+```sql
+{current_code}
+```
+
+# 业务对账验证失败详情
+以下断言未通过，说明 SP 计算出的数据与业务预期不符:
+
+{failures_text}
+
+# 修复要求
+1. 仔细分析每条失败断言的"期望条件"和"实际返回值"，定位业务逻辑错误（如关联条件、过滤条件、聚合口径、NULL处理、金额精度等）
+2. 只输出修正后的 T-SQL 实现体（BEGIN TRANSACTION 到 COMMIT TRANSACTION 之间的业务逻辑代码）
+3. 不要包含 CREATE PROCEDURE 头部、参数声明、最外层 BEGIN/END、BEGIN TRY/CATCH、INSERT INTO ZZ_SP_LOG（模板已提供）
+4. 使用具体表名字段名，不要占位符
+5. 针对失败的对账项做出实质性修正，不要只改注释
+"""
+
+
+def regenerate_sp_with_feedback(
+    spec: SPSpec,
+    current_code: str,
+    failed_checks: list[dict],
+    schema_context: str,
+    api_key: str,
+    model: str = "deepseek-chat",
+    base_url: str = "https://api.deepseek.com",
+) -> str:
+    """基于失败的业务对账断言，让 LLM 重新生成修正后的 SP 实现体.
+
+    Args:
+        spec: 存储过程规格
+        current_code: 当前完整 SP 代码
+        failed_checks: 失败断言列表（含 name/description/check_sql/assertion/actual_values/detail）
+        schema_context: Schema 上下文
+        api_key: LLM API Key
+        model: 模型 ID
+        base_url: API Base URL
+
+    Returns:
+        修正后的 T-SQL 实现体（已清理包装）
+
+    Raises:
+        异常时向上抛出，由调用方处理。
+    """
+    prompt = build_repair_prompt(spec, current_code, failed_checks, schema_context)
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=3000,
+        temperature=0.1,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    body = response.choices[0].message.content.strip()
+
+    # 去掉 markdown 代码块包裹
+    if body.startswith("```"):
+        first_nl = body.find("\n")
+        if first_nl != -1:
+            body = body[first_nl + 1:]
+        if body.endswith("```"):
+            body = body[:-3]
+        body = body.strip()
+
+    if not body:
+        raise ValueError("LLM 修复返回空内容")
+
+    body = _clean_implementation_body(body)
+    if not body:
+        raise ValueError("修复后的实现体清理后为空")
+
+    logger.info(f"Regenerated implementation for {spec.name} ({len(body)} chars)")
+    return body
+
+
 def generate_sp_code(spec: SPSpec, implementation_body: str = "") -> str:
     """根据 SP 规格生成完整 T-SQL 代码."""
     # 构建参数块
@@ -625,6 +786,7 @@ def generate_sp_architecture(
                 output_table=(p.get("output_table") or "").strip(),
                 parameters=p.get("parameters") or {},
                 business_logic=(p.get("business_logic") or "").strip(),
+                verification_checks=_normalize_checks(p.get("verification_checks")),
             )
             if not spec.name:
                 continue
