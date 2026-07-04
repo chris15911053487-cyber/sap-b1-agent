@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter
@@ -13,6 +14,10 @@ from agent.sp_deployer import deploy_sp_batch, verify_sp_batch
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sp", tags=["sp"])
+
+CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "config.yaml"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +82,7 @@ async def deploy_stored_procedures(request: SpDeployRequest) -> SpDeployResponse
     2. 部署成功的 SP 自动验证 (EXEC @Debug=1)
     3. 返回部署 + 验证结果
     """
-    config = load_config()
+    config = load_config(CONFIG_PATH)
 
     # Determine target database
     db_name = request.database or config.agent.default_db
