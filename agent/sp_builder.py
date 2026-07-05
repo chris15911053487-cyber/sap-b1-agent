@@ -321,31 +321,7 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    BEGIN TRY
-        BEGIN TRANSACTION;
-
-        -- ========================================
-        -- Step 1: [业务逻辑 - 由 AI 生成具体代码]
-        {implementation}
-
-        -- ========================================
-
-        COMMIT TRANSACTION;
-
-        -- 执行日志
-        INSERT INTO ZZ_SP_LOG (SPName, Status, ExecTime)
-        VALUES ('{name}', 'SUCCESS', GETDATE());
-
-    END TRY
-    BEGIN CATCH
-        IF @@TRANCOUNT > 0
-            ROLLBACK TRANSACTION;
-
-        INSERT INTO ZZ_SP_LOG (SPName, Status, ErrorMsg, ExecTime)
-        VALUES ('{name}', 'FAILED', ERROR_MESSAGE(), GETDATE());
-
-        THROW;
-    END CATCH
+    {implementation}
 END
 GO
 """
@@ -354,22 +330,18 @@ GO
 def _clean_implementation_body(body: str) -> str:
     """Post-process LLM-generated implementation body to remove problematic patterns.
 
-    The template (SP_TEMPLATE) already provides:
+    The template (SP_TEMPLATE) provides:
       - CREATE PROCEDURE header and parameters
       - BEGIN / SET NOCOUNT ON
-      - BEGIN TRY / BEGIN TRANSACTION ... COMMIT TRANSACTION / END TRY
-      - BEGIN CATCH ... END CATCH / END
-      - Trailing GO
+      - END / GO
 
-    So the implementation body should contain ONLY the business logic between
-    BEGIN TRANSACTION and COMMIT TRANSACTION. This function strips out any
-    duplicate wrappers that the LLM might have included despite instructions.
+    So the implementation body should contain ONLY the business logic.
+    This function strips out any wrapper that the LLM might have included.
     """
     # 1. Remove all GO batch separators (standalone lines)
     body = re.sub(r'^\s*GO\s*$', '', body, flags=re.IGNORECASE | re.MULTILINE)
 
     # 2. Remove CREATE PROCEDURE ... AS BEGIN if LLM included a full SP wrapper
-    # This handles cases where the LLM ignores the "don't include header" instruction
     _had_create_proc = bool(re.search(
         r'^\s*CREATE\s+PROCEDURE\s+',
         body,
@@ -384,49 +356,9 @@ def _clean_implementation_body(body: str) -> str:
     # 3. Remove SET NOCOUNT ON (already in template)
     body = re.sub(r'^\s*SET\s+NOCOUNT\s+ON\s*;?\s*$', '', body, flags=re.IGNORECASE | re.MULTILINE)
 
-    # 4. Remove outermost BEGIN TRY / END TRY ... BEGIN CATCH / END CATCH wrapper
-    #    but keep the content inside BEGIN TRY
-    try_match = re.match(
-        r'\s*BEGIN\s+TRY\s*\n(.*?)\n\s*END\s+TRY\s*\n\s*BEGIN\s+CATCH\s*\n.*?END\s+CATCH',
-        body, flags=re.IGNORECASE | re.DOTALL,
-    )
-    if try_match:
-        body = try_match.group(1)
-
-    # 5. Remove outermost BEGIN TRANSACTION / COMMIT TRANSACTION wrapper
-    #    but keep content between them
-    trans_match = re.match(
-        r'\s*BEGIN\s+TRANSACTION\s*;?\s*\n(.*?)\n\s*COMMIT\s+TRANSACTION\s*;?\s*$',
-        body, flags=re.IGNORECASE | re.DOTALL,
-    )
-    if trans_match:
-        body = trans_match.group(1)
-
-    # 6. Remove trailing END only if we stripped a CREATE PROCEDURE wrapper (step 2)
-    #    This END is the outer procedure's closing END and conflicts with the template.
-    #    Do NOT remove trailing END otherwise — it may be a legitimate IF...BEGIN...END.
+    # 4. Remove trailing END that belongs to CREATE PROCEDURE wrapper
     if _had_create_proc:
         body = re.sub(r'\n\s*END\s*;?\s*$', '', body, flags=re.IGNORECASE)
-
-    # 7. Remove ROLLBACK / re-THROW blocks that duplicate the template's CATCH
-    body = re.sub(
-        r'^\s*IF\s+@@TRANCOUNT\s*>\s*0\s*\n\s*ROLLBACK\s+TRANSACTION\s*;?\s*$',
-        '', body, flags=re.IGNORECASE | re.MULTILINE,
-    )
-
-    # 8. Remove any INSERT INTO ZZ_SP_LOG statements (template already handles logging)
-    body = re.sub(
-        r'^\s*INSERT\s+INTO\s+ZZ_SP_LOG\s*\(.*?\)\s*VALUES\s*\(.*?\)\s*;?\s*$',
-        '', body, flags=re.IGNORECASE | re.MULTILINE,
-    )
-    # Also handle multi-line INSERT INTO ZZ_SP_LOG
-    body = re.sub(
-        r'^\s*INSERT\s+INTO\s+ZZ_SP_LOG\s*\([^)]*\)\s*\n\s*VALUES\s*\([^)]*\)\s*;?\s*$',
-        '', body, flags=re.IGNORECASE | re.MULTILINE,
-    )
-
-    # 9. Remove THROW statements that duplicate the template's CATCH
-    body = re.sub(r'^\s*THROW\s*;?\s*$', '', body, flags=re.IGNORECASE | re.MULTILINE)
 
     # Clean up excessive blank lines
     body = re.sub(r'\n{3,}', '\n\n', body)
@@ -450,7 +382,7 @@ def build_sp_implementation_prompt(spec: SPSpec, schema_context: str) -> str:
     else:
         params_desc = "  仅 @Debug BIT = 0"
 
-    return f"""你是一位资深的 SAP Business One T-SQL 开发专家，需要为以下存储过程编写完整的生产级实现代码。
+    return f"""你是一位资深的 SAP Business One T-SQL 开发专家，需要为以下存储过程编写实现代码。
 
 # 数据库 Schema
 {schema_context}
@@ -468,27 +400,20 @@ def build_sp_implementation_prompt(spec: SPSpec, schema_context: str) -> str:
 **详细业务逻辑**:
 {spec.business_logic}
 
-# SAP B1 T-SQL 编码规范
-- 使用 SAP B1 标准表关联（如 ORDR.DocEntry = RDR1.DocEntry）
-- 日期字段使用 SQL Server 函数（DATEADD, DATEDIFF, GETDATE, EOMONTH）
-- 对可能为 NULL 的数值字段使用 ISNULL(Field, 0)
-- 金额计算使用 ROUND(..., 2) 保留两位小数
-- 所有单据过滤 CANCELED = 'N'
-- 使用 TOP 限制大批量操作的行数
-- 临时结果考虑写入 @output_table 指定的中间表（ZZ_ 前缀）
-- 包含事务控制（BEGIN/COMMIT/ROLLBACK TRANSACTION）
-- 使用 BEGIN TRY...BEGIN CATCH 错误处理
-- 支持 @Debug 参数控制调试输出
+# 编码规范
+- SAP B1 标准表关联（如 ORDR.DocEntry = RDR1.DocEntry）
+- 数值字段用 ISNULL(Field, 0) 防 NULL
+- 金额用 ROUND(..., 2)
+- 单据过滤 CANCELED = 'N'
+- 结果写入输出表（ZZ_ 前缀），先 DELETE 再 INSERT
 - 关键步骤添加注释
 
 # 要求
-1. 只输出 T-SQL 实现体（BEGIN TRANSACTION 到 COMMIT TRANSACTION 之间的代码）
-2. 不要包含 CREATE PROCEDURE 头部、参数声明、或最外层的 BEGIN/END 包装
-3. 不要包含 BEGIN TRY/BEGIN CATCH 错误处理（模板已提供）
-4. 不要包含 INSERT INTO ZZ_SP_LOG 日志记录（模板已提供）
-5. 代码要可以直接嵌入存储过程模板中
-6. 使用具体的表名和字段名，不要使用占位符
-7. 每个查询步骤添加清晰的注释
+1. 只输出纯 T-SQL 业务逻辑代码
+2. 不要包含 CREATE PROCEDURE、参数声明、BEGIN/END 外层包装
+3. 不要包含 SET NOCOUNT ON（模板已提供）
+4. 代码要能直接嵌入到 CREATE PROCEDURE ... AS BEGIN SET NOCOUNT ON; {{这里}} END GO 中
+5. 使用具体的表名和字段名，不要用占位符
 """
 
 

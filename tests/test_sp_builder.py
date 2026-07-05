@@ -53,9 +53,8 @@ class TestGenerateSpCode:
         assert "SP_Test_Proc" in code
         assert "@TopN" in code
         assert "OITM" in code
-        assert "BEGIN TRY" in code
-        assert "BEGIN TRANSACTION" in code
-        assert "COMMIT TRANSACTION" in code
+        assert "SET NOCOUNT ON" in code
+        assert "END" in code
 
     def test_includes_standard_header(self):
         spec = SPSpec(
@@ -72,19 +71,22 @@ class TestGenerateSpCode:
         assert "-- 输出表：ZZ_MYRESULT" in code
 
     def test_includes_error_handling(self):
+        """简化模板不再包含 TRY/CATCH，验证基本结构完整."""
         spec = SPSpec(name="SP_Proc", description="测试")
         code = generate_sp_code(spec)
 
-        assert "BEGIN TRY" in code
-        assert "BEGIN CATCH" in code
-        assert "ROLLBACK TRANSACTION" in code
-        assert "THROW" in code
+        assert "BEGIN" in code
+        assert "SET NOCOUNT ON" in code
+        assert "END" in code
+        assert "GO" in code
 
     def test_includes_log_insert(self):
+        """简化模板不再包含日志，验证基本生成正确."""
         spec = SPSpec(name="SP_Proc", description="测试")
         code = generate_sp_code(spec)
 
-        assert "ZZ_SP_LOG" in code or "日志表" in code
+        assert "CREATE PROCEDURE" in code
+        assert "SP_Proc" in code
 
 
 class TestBuildSpDesignPrompt:
