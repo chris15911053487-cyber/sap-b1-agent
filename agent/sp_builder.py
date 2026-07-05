@@ -246,15 +246,11 @@ def build_sp_design_prompt(requirement: str, schema_context: str) -> str:
 - SP_模板: SP_{{Module}}_{{Function}}
 - Module: Cost, INV, Sales, Purchase, Production, Finance, Report
 - 中间表前缀: ZZ_
-- 日志表: ZZ_SP_LOG (列: SPName, Status, ErrorMsg, ExecTime)
 
 # 每个 SP 的要求
 - 职责单一：一个 SP 只做一件事
 - 头部注释块完整（功能、依赖、输出）
-- BEGIN TRY...CATCH 错误处理
-- 事务控制
-- @Debug BIT = 0 调试参数
-- 执行日志记录到 ZZ_SP_LOG
+- 结构简洁，只写业务逻辑
 
 # 用户需求
 {requirement}
@@ -533,8 +529,8 @@ def build_repair_prompt(
 
 # 修复要求
 1. 仔细分析每条失败断言的"期望条件"和"实际返回值"，定位业务逻辑错误（如关联条件、过滤条件、聚合口径、NULL处理、金额精度等）
-2. 只输出修正后的 T-SQL 实现体（BEGIN TRANSACTION 到 COMMIT TRANSACTION 之间的业务逻辑代码）
-3. 不要包含 CREATE PROCEDURE 头部、参数声明、最外层 BEGIN/END、BEGIN TRY/CATCH、INSERT INTO ZZ_SP_LOG（模板已提供）
+2. 只输出修正后的 T-SQL 业务逻辑代码
+3. 不要包含 CREATE PROCEDURE 头部、参数声明、最外层 BEGIN/END、SET NOCOUNT ON（模板已提供）
 4. 使用具体表名字段名，不要占位符
 5. 针对失败的对账项做出实质性修正，不要只改注释
 """
