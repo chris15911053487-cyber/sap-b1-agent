@@ -73,12 +73,13 @@ async function handleSave() {
   saveSuccess.value = false
 
   try {
-    // Build updated sp_arch data with edited codes
+    // Build updated sp_arch data with edited codes and verification_checks
     const updatedData = {
       ...props.data,
       procedures: procedures.value.map(proc => ({
         ...proc,
         generated_code: editableCodes.value[proc.name] || proc.generated_code,
+        verification_checks: editableChecks.value[proc.name] || proc.verification_checks || [],
       })),
     }
 
@@ -167,6 +168,38 @@ function getDeployResultIcon(name: string): string {
 // 业务对账验证 + AI 自修复
 // ---------------------------------------------------------------------------
 
+// 可编辑的 verification_checks — key 为 SP 名称
+const editableChecks = ref<Record<string, VerificationCheckDef[]>>({})
+// 每个 SP 的 checks 编辑模式开关
+const checksEditingStates = ref<Record<string, boolean>>({})
+
+function getEditableChecks(procName: string, originalChecks: VerificationCheckDef[]): VerificationCheckDef[] {
+  if (!(procName in editableChecks.value)) {
+    editableChecks.value[procName] = JSON.parse(JSON.stringify(originalChecks || []))
+  }
+  return editableChecks.value[procName]
+}
+
+function toggleChecksEdit(procName: string, originalChecks: VerificationCheckDef[]) {
+  if (!checksEditingStates.value[procName]) {
+    // 进入编辑模式时初始化
+    getEditableChecks(procName, originalChecks)
+  }
+  checksEditingStates.value[procName] = !checksEditingStates.value[procName]
+}
+
+function updateCheckSql(procName: string, index: number, event: Event) {
+  const target = event.target as HTMLTextAreaElement
+  getEditableChecks(procName, [])  // ensure initialized
+  editableChecks.value[procName][index].check_sql = target.value
+}
+
+function updateCheckAssertion(procName: string, index: number, event: Event) {
+  const target = event.target as HTMLInputElement
+  getEditableChecks(procName, [])
+  editableChecks.value[procName][index].assertion = target.value
+}
+
 // 是否有任何 SP 配置了业务对账断言
 const hasVerificationChecks = computed(() =>
   procedures.value.some(p => (p.verification_checks?.length || 0) > 0)
@@ -191,7 +224,7 @@ async function handleValidate() {
       .filter(p => (p.verification_checks?.length || 0) > 0)
       .map(p => ({
         name: p.name,
-        verification_checks: (p.verification_checks || []) as VerificationCheckDef[],
+        verification_checks: getEditableChecks(p.name, (p.verification_checks || []) as VerificationCheckDef[]),
       }))
 
     validateResponse.value = await validateStoredProcedures(input)
@@ -218,7 +251,7 @@ async function handleRepair(spName: string) {
         business_logic: proc.business_logic,
         parameters: proc.parameters || {},
         generated_code: editableCodes.value[proc.name] || proc.generated_code,
-        verification_checks: (proc.verification_checks || []) as VerificationCheckDef[],
+        verification_checks: getEditableChecks(proc.name, (proc.verification_checks || []) as VerificationCheckDef[]),
       },
       undefined,
       3,
@@ -380,6 +413,68 @@ async function handleRepair(spName: string) {
 
         <!-- Preview mode: highlighted code -->
         <pre v-else class="code-preview"><code class="language-sql" v-html="highlightCode(getEditableCode(proc.name, proc.generated_code))"></code></pre>
+      </div>
+
+      <!-- Verification Checks — 可编辑 -->
+      <div v-if="proc.verification_checks && proc.verification_checks.length > 0" class="checks-section">
+        <div class="checks-header">
+          <span class="checks-label">🔍 业务对账断言 ({{ proc.verification_checks.length }})</span>
+          <n-button
+            size="tiny"
+            :type="checksEditingStates[proc.name] ? 'primary' : 'default'"
+            @click="toggleChecksEdit(proc.name, proc.verification_checks as VerificationCheckDef[])"
+          >
+            {{ checksEditingStates[proc.name] ? '收起编辑' : '编辑断言' }}
+          </n-button>
+        </div>
+
+        <div v-if="checksEditingStates[proc.name]" class="checks-edit-list">
+          <div
+            v-for="(check, cIdx) in getEditableChecks(proc.name, proc.verification_checks as VerificationCheckDef[])"
+            :key="cIdx"
+            class="check-edit-item"
+          >
+            <div class="check-edit-header">
+              <n-tag size="tiny" :type="check.severity === 'error' ? 'error' : 'warning'">{{ check.severity }}</n-tag>
+              <span class="check-edit-name">{{ check.name }}</span>
+              <n-tag size="tiny" :bordered="false">{{ check.category }}</n-tag>
+            </div>
+            <div v-if="check.description" class="check-edit-desc">{{ check.description }}</div>
+            <div class="check-edit-field">
+              <label class="check-field-label">check_sql:</label>
+              <textarea
+                class="check-sql-editor"
+                :value="check.check_sql"
+                @input="updateCheckSql(proc.name, cIdx, $event)"
+                spellcheck="false"
+                rows="4"
+              />
+            </div>
+            <div class="check-edit-field">
+              <label class="check-field-label">assertion:</label>
+              <input
+                class="check-assertion-editor"
+                type="text"
+                :value="check.assertion"
+                @input="updateCheckAssertion(proc.name, cIdx, $event)"
+                spellcheck="false"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- 非编辑模式：简要展示 -->
+        <div v-else class="checks-summary">
+          <div
+            v-for="(check, cIdx) in getEditableChecks(proc.name, proc.verification_checks as VerificationCheckDef[])"
+            :key="cIdx"
+            class="check-summary-item"
+          >
+            <span class="check-summary-icon">{{ check.severity === 'error' ? '🔴' : '🟡' }}</span>
+            <span class="check-summary-name">{{ check.name }}</span>
+            <code class="check-summary-assertion">{{ check.assertion }}</code>
+          </div>
+        </div>
       </div>
     </n-card>
 
@@ -982,5 +1077,136 @@ async function handleRepair(spName: string) {
 
 .repair-code {
   margin-top: 8px;
+}
+
+/* Verification Checks 编辑区 */
+.checks-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e1e4e8;
+}
+
+.checks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.checks-label {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.checks-edit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.check-edit-item {
+  padding: 10px 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fafbfc;
+}
+
+.check-edit-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.check-edit-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.check-edit-desc {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.check-edit-field {
+  margin-top: 6px;
+}
+
+.check-field-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 2px;
+  font-family: 'Courier New', monospace;
+}
+
+.check-sql-editor {
+  width: 100%;
+  min-height: 80px;
+  padding: 8px 10px;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #fff;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.check-sql-editor:focus {
+  outline: none;
+  border-color: #2080f0;
+  box-shadow: 0 0 0 2px rgba(32, 128, 240, 0.1);
+}
+
+.check-assertion-editor {
+  width: 100%;
+  padding: 6px 10px;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.check-assertion-editor:focus {
+  outline: none;
+  border-color: #2080f0;
+  box-shadow: 0 0 0 2px rgba(32, 128, 240, 0.1);
+}
+
+.checks-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.check-summary-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.check-summary-icon {
+  flex-shrink: 0;
+}
+
+.check-summary-name {
+  font-weight: 500;
+  color: #333;
+}
+
+.check-summary-assertion {
+  font-size: 11px;
+  color: #666;
+  background: #f0f2f5;
+  padding: 1px 6px;
+  border-radius: 3px;
 }
 </style>
